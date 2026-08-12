@@ -6,7 +6,7 @@ Three ways to run it. Pick the row that describes you.
 |---|---|---|
 | [Desktop app](#desktop-app) | Anyone. No technical setup | **Nothing.** Windows 10 or 11 |
 | [Localhost](#localhost) | Developers, or trying it out | Python 3.11+ and git |
-| [VPS](#vps-247) | Running it 24/7 | An Ubuntu server, ~2 GB RAM |
+| [VPS](#vps-247) | Running it 24/7 | An Ubuntu server, 2 GB RAM. See [VPS.md](VPS.md) |
 
 ---
 
@@ -103,110 +103,27 @@ claiming anything, so you can compare its choices against what you'd have picked
 
 ## VPS (24/7)
 
-Only worth it if the machine at home can't stay on. **Read the warning below
-first — for some portals a VPS is actively worse.**
+**Full walkthrough: [docs/VPS.md](VPS.md).** It is written for someone who has
+never used Linux, and it is one script rather than the page of hand-typed
+commands that used to live here.
 
-### Before you choose this
-
-**A captcha will stop the agent until someone can reach that server's browser.**
-The challenge is tied to the session running on the VPS, so it cannot be
-forwarded to your phone. On your own PC you just click it.
-
-Datacenter IP addresses also score far worse with reCAPTCHA and look more
-suspicious to portals that watch for automation. **If your portal shows
-captchas, run it on a home computer instead.**
-
-### Requirements
-
-- **Ubuntu LTS** (22.04 or 24.04)
-- **At least 2 GB RAM.** The agent drives a real browser — session cookies do
-  not work outside one, so there is no lightweight mode
-- 10 GB disk
-
-Any provider works. [Hostinger](https://www.hostinger.com/vps-hosting) is one of
-the cheaper ones — pick a **KVM** plan whose RAM meets the above. *No
-affiliation, no referral, not sponsored.*
-
-### Setup
-
-Create the VPS with the Ubuntu LTS template, then connect:
+The short version of what changed and why: the agent drives a **visible**
+browser, because FLICA challenges the sign-in with a "confirm you are human" box
+and this agent refuses to solve one. A server has no screen, so the setup script
+installs a virtual screen and a way to look at it through an SSH tunnel. Doing
+that by hand is where this goes wrong, so it is scripted:
 
 ```bash
-ssh root@YOUR_SERVER_IP
+curl -fsSL https://raw.githubusercontent.com/djbatalona06/airline-shift-agent-/main/scripts/setup-vps.sh -o setup-vps.sh && bash setup-vps.sh
 ```
 
-Make a normal user rather than running as root:
+Requirements: **Ubuntu 22.04 or 24.04**, **at least 2 GB RAM** (a real browser
+runs for the agent's whole life — there is no lightweight mode), 10 GB disk.
 
-```bash
-adduser shiftagent
-usermod -aG sudo shiftagent
-su - shiftagent
-```
-
-Install dependencies. `--with-deps` pulls the system libraries Chromium needs —
-there are a lot, and guessing them by hand is how this goes wrong:
-
-```bash
-sudo apt update
-sudo apt install -y python3-venv python3-pip git
-
-git clone https://github.com/djbatalona06/airline-shift-agent-.git
-cd airline-shift-agent-
-python3 -m venv .venv
-.venv/bin/python -m pip install -e .
-.venv/bin/python -m playwright install --with-deps chromium
-```
-
-Create your config:
-
-```bash
-cp config/users/example.yaml config/users/me.yaml
-nano config/users/me.yaml
-```
-
-### Run it as a service
-
-```bash
-sudo nano /etc/systemd/system/shift-agent.service
-```
-
-```ini
-[Unit]
-Description=Shift Agent
-After=network-online.target
-
-[Service]
-Type=simple
-User=shiftagent
-WorkingDirectory=/home/shiftagent/airline-shift-agent-
-ExecStart=/home/shiftagent/airline-shift-agent-/.venv/bin/python -m shift_agent.main run --config config/users/me.yaml
-Restart=always
-RestartSec=30
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable --now shift-agent
-journalctl -u shift-agent -f
-```
-
-### Reaching the dashboard — do not open a port
-
-The dashboard binds to `127.0.0.1` and stays there. Reach it through an SSH
-tunnel from your own machine:
-
-```bash
-ssh -L 8765:127.0.0.1:8765 shiftagent@YOUR_SERVER_IP
-```
-
-Then open `http://127.0.0.1:8765` locally.
-
-**Do not open port 8765 in the firewall.** The dashboard contains your full
-roster, and an open port would put it on the internet behind nothing but a URL
-nobody has guessed yet.
+**Consider not doing this.** A datacenter address gets challenged more often
+than a home connection, and each challenge costs you a remote-view session
+rather than one click. If any computer you own can stay on, use that instead.
+[docs/VPS.md](VPS.md) opens with the comparison.
 
 ---
 

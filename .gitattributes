@@ -1,0 +1,8 @@
+# Shell scripts must keep LF endings whatever the contributor's machine does.
+# setup-vps.sh is fetched with curl and run on Ubuntu; with CRLF it fails as
+# "/bin/bash^M: bad interpreter", which is an unreadable error for the person
+# it is written for.
+*.sh text eol=lf
+
+# systemd reads unit files line by line and does not tolerate CR either.
+*.service text eol=lf

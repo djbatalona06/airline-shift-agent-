@@ -15,6 +15,7 @@ email, a note — change it. That applies regardless of this tool.
 | Data | Location | Protection |
 |---|---|---|
 | Telegram bot token, session material | OS keychain (Windows Credential Manager) | Encrypted against your Windows login |
+| The same, on a headless Linux server | `~/.shift-agent/secrets.json` | **File permissions only** — `0600`, owned by the service account. See below |
 | Shift history, verdicts, claims | SQLite under `%LOCALAPPDATA%` | Filesystem ACLs. **No secrets** |
 | Dashboard HTML, `.ics`, markdown | Same profile folder | Your schedule. No secrets |
 | Config YAML | Wherever you put it | Username and availability. No password |
@@ -22,6 +23,29 @@ email, a note — change it. That applies regardless of this tool.
 The split is enforced, not conventional: `store.py` is documented as holding no
 secrets, and a test asserts that a built dashboard payload contains no password,
 cookie, or token.
+
+### The Linux fallback, and why it is not encrypted
+
+A headless server has no keychain — `keyring` there has no working backend at
+all, which used to take the agent down at startup. On such a machine secrets go
+to a `0600` file inside a `0700` directory instead.
+
+**That file is not encrypted, on purpose.** Encrypting it would be theatre: for
+the service to restart after a reboot without someone typing a passphrase, the
+key would have to sit unattended on the same disk. And the browser profile
+beside it already holds live portal cookies in ordinary files, so the weakest
+link would be unchanged either way.
+
+On a single-purpose server the real boundary is the Unix account plus full-disk
+encryption from your provider. Two consequences worth knowing:
+
+- **Anyone with root on that server can read the token.** On a VPS you rent,
+  that includes the hosting provider.
+- **Windows is unaffected.** It still uses Credential Manager, and a test
+  asserts it never silently downgrades to the file.
+
+Only the Telegram bot token realistically lives here. The portal password is
+never stored anywhere, on any platform — you type it into the portal's own page.
 
 ## Per-user isolation
 

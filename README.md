@@ -14,9 +14,11 @@ asks you to confirm before it takes anything.
 Job-agnostic by design. Adding a new employer means writing one adapter class;
 everything else — scheduling, notifications, dashboard, packaging — is shared.
 
-**Status:** core complete, 220 tests. The FLICA adapter's parsers are tested
-against fixtures; the live browser path has not yet run a full week against a
-real portal.
+**Status:** core complete, 231 tests. Every command in this README and in
+[docs/INSTALL.md](docs/INSTALL.md) has been executed and checked — see
+[docs/VERIFICATION.md](docs/VERIFICATION.md) for what passed and, more usefully,
+what is still unproven. The FLICA adapter's parsers are tested against fixtures;
+**no live sign-in to a real portal has happened yet.**
 
 ---
 
@@ -44,16 +46,23 @@ real portal.
 
 ---
 
-## Two ways to run it
+## Three ways to run it
 
-| | Desktop app | Localhost |
-|---|---|---|
-| For | Anyone. No technical setup | Developers, or running on a server |
-| Needs | Nothing — Windows only | Python 3.11+ and git |
-| Get it | Download the release, unzip, run | Clone and `pip install -e .` |
+| | Desktop app | Localhost | Server, 24/7 |
+|---|---|---|---|
+| For | Anyone. No technical setup | Developers, or trying it out | Running it when your PC is off |
+| Needs | Nothing — Windows only | Python 3.11+ and git | An Ubuntu box, 2 GB RAM, ~45 min |
+| Get it | Download the release, unzip, run | Clone and `pip install -e .` | One setup script |
+| Guide | [INSTALL.md](docs/INSTALL.md) | [INSTALL.md](docs/INSTALL.md) | **[VPS.md](docs/VPS.md)** |
 
-Full instructions, including a VPS for 24/7 operation:
-**[docs/INSTALL.md](docs/INSTALL.md)**
+**On picking the server option:** it is the only one that survives your computer
+being off, and it costs a real trade. FLICA challenges the sign-in with a
+"confirm you are human" box, this agent refuses to solve those, and a server has
+no screen — so clearing one means opening a remote view rather than clicking
+once. Datacenter addresses also get challenged *more* than home connections. If
+you have a computer that can stay on, that is the easier answer.
+[docs/VPS.md](docs/VPS.md) opens with the full comparison, then walks the whole
+setup for someone who has never used Linux.
 
 ### Quickest look
 
@@ -78,7 +87,9 @@ theme switcher that remembers your choice.
   Notion.
 
 It is served on `127.0.0.1` with a random token in the URL, never on a public
-interface.
+interface. Verified: a missing token, a wrong token, and a path-traversal
+attempt all return the same 404, and the port refuses connections from anything
+but loopback.
 
 ---
 
@@ -104,7 +115,9 @@ unreachable detail page results in an alert, never a claim.
 - **Credentials never touch this software.** You sign in yourself; it works with
   the session you create. Passwords are not stored, typed, or transmitted by it.
 - Anything it does store goes in the **OS keychain** (Windows Credential
-  Manager), not in a file.
+  Manager). A headless Linux server has no keychain, so there it falls back to a
+  `0600` file owned by the service account — weaker, and
+  [documented as such](docs/SECURITY.md#where-things-are-stored).
 - The database and dashboard hold your schedule and **no secrets**.
 - Nothing is sent anywhere except the portal you configure and, if you set it
   up, your own Telegram bot.
@@ -165,6 +178,17 @@ python -m venv .venv
 ```
 
 Tests run with no network, no browser, and no account.
+
+The server path is verified in a throwaway Ubuntu container rather than by
+reading the script:
+
+```bash
+docker run -d --name sa-test ubuntu:24.04 sleep infinity
+```
+
+then copy the repo in and run `scripts/setup-vps.sh` with
+`SHIFT_AGENT_SOURCE` pointed at it. [docs/VERIFICATION.md](docs/VERIFICATION.md)
+records what that run covers.
 
 ---
 
