@@ -21,8 +21,10 @@ from shift_agent.poller import Poller
 from shift_agent.store import PAUSED_KEY, Store
 
 ALL_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+# Both fabricated. The token is a made-up hex string of realistic shape - never
+# copy a real one out of a capture into a test, since tests get published.
 PASSWORD = "hunter2-not-in-logs"
-TOKEN = "000000007F98011B01DD29FD01B3169E"
+TOKEN = "DEADBEEF0123456789ABCDEFDEADBEEF"
 
 
 def make_config(**over) -> UserConfig:
@@ -165,7 +167,7 @@ def test_dashboard_payload_excludes_secrets(tmp_path):
     [
         "password=hunter2",
         "Password: hunter2",
-        "token=000000007F98011B01DD29FD01B3169E",
+        "token=DEADBEEF0123456789ABCDEFDEADBEEF",
         "sessionId: abc123def456abc123def456",
         "api_key = sk-abcdef",
         "Authorization: Bearer abc123",

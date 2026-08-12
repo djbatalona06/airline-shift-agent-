@@ -24,13 +24,20 @@ wrong.
 from __future__ import annotations
 
 import re
+import logging
+import os
 from datetime import UTC, datetime, timedelta
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import Any, NamedTuple
 from zoneinfo import ZoneInfo
 
+from .. import paths
+from ..logging_safe import scrub
 from ..models import AuthResult, AuthState, ClaimOutcome, ClaimResult, Shift
 from .base import PortalAdapter, register
+
+log = logging.getLogger(__name__)
 
 MONTHS = {m: i for i, m in enumerate(
     ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"], start=1)}
@@ -334,6 +341,19 @@ def status_outcome(status: str) -> ClaimOutcome:
     return ClaimOutcome.ERROR
 
 
+def _headless_shell_available() -> bool:
+    """Whether Playwright's separate headless binary is present.
+
+    Only meaningful when browsers come from an explicit folder, which is how
+    the packaged app ships them. A source install resolves through Playwright's
+    own default location and is assumed complete.
+    """
+    root = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    if not root:
+        return True
+    return any(Path(root).glob("chromium_headless_shell*"))
+
+
 @register("flica")
 class FlicaAdapter(PortalAdapter):
     """Browser-driven FLICA adapter.
@@ -349,8 +369,53 @@ class FlicaAdapter(PortalAdapter):
     def __init__(self, config, http=None, secrets=None) -> None:
         super().__init__(config, http, secrets or {})
         self._page: Any = None
+        self._context: Any = None
+        self._playwright: Any = None
         self._position_cache: dict[str, str | None] = {}
         self._tz = config.availability.timezone
+
+    # --- browser lifecycle --------------------------------------------------
+
+    async def start(self) -> None:
+        """Open a persistent browser profile and land on the portal.
+
+        Persistent rather than fresh: the session then survives restarts, so she
+        signs in (and clears any captcha) once rather than every time the agent
+        is relaunched.
+
+        Headed by default. FLICA presents a reCAPTCHA and the agent will not
+        solve it, so a human has to be able to see and click the window. A
+        headless run would simply stall at the challenge forever.
+        """
+        from playwright.async_api import async_playwright
+
+        options = self.config.portal.options or {}
+        profile = Path(options.get("browser_profile") or (paths.profile_dir(self.config.name) / "browser"))
+        profile.mkdir(parents=True, exist_ok=True)
+
+        headless = bool(options.get("headless", False))
+        if headless and not _headless_shell_available():
+            # Headless uses a separate `chromium_headless_shell` binary. The
+            # packaged app ships only full Chromium, because this portal shows a
+            # captcha that a human has to click - a headless run would stall at
+            # it forever. Fall back rather than dying on a missing binary.
+            log.warning("headless requested but the headless shell is not bundled; running headed")
+            headless = False
+
+        self._playwright = await async_playwright().start()
+        self._context = await self._playwright.chromium.launch_persistent_context(
+            user_data_dir=str(profile),
+            headless=headless,
+            args=["--disable-blink-features=AutomationControlled"],
+        )
+        self._page = self._context.pages[0] if self._context.pages else await self._context.new_page()
+
+        url = self.config.portal.base_url
+        if url:
+            try:
+                await self._page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+            except Exception as exc:
+                log.warning("initial navigation failed: %s", scrub(exc))
 
     # --- browser plumbing ---------------------------------------------------
 
@@ -463,3 +528,11 @@ class FlicaAdapter(PortalAdapter):
 
     async def close(self) -> None:
         self._position_cache.clear()
+        for resource, closer in ((self._context, "close"), (self._playwright, "stop")):
+            if resource is None:
+                continue
+            try:
+                await getattr(resource, closer)()
+            except Exception as exc:
+                log.debug("cleanup failed: %s", scrub(exc))
+        self._context = self._playwright = self._page = None

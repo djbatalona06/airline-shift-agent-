@@ -10,6 +10,7 @@ venv/
 # Build artifacts. The .exe ships as a GitHub Release asset, never committed.
 packaging/build/
 packaging/dist/
+packaging/release/
 packaging/*.spec
 build/
 dist/

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -12,6 +13,7 @@ from pathlib import Path
 import httpx
 
 from . import logging_safe, paths, secrets
+from .logging_safe import scrub
 # These imports look unused and are not. The adapter registry is populated by
 # decorators, so PyInstaller's static analysis sees no reference to these
 # modules; without them the packaged exe builds cleanly and then fails at
@@ -27,6 +29,31 @@ from .poller import Poller
 from .store import Store
 
 DEFAULT_STATE = Path.home() / ".shift-agent" / "state.db"
+
+
+def _configure_browsers() -> None:
+    """Point Playwright at the Chromium shipped beside the executable.
+
+    Chromium is deliberately not inside the exe: it is ~150 MB and --onefile
+    unpacks its whole payload to a temp folder on every launch. It travels in a
+    `browsers/` folder next to the exe instead.
+
+    Without this, a frozen build looks inside its own temp extraction, finds
+    nothing, and prints Playwright's "run playwright install" banner — advice
+    that makes no sense to someone who was handed a zip file.
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    beside = Path(sys.executable).parent / "browsers"
+    if beside.is_dir():
+        os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(beside))
+
+
+def browsers_available() -> bool:
+    path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    if path:
+        return any(Path(path).glob("chromium*"))
+    return True   # source installs resolve through Playwright's own default
 
 
 def _configure_logging(verbose: bool) -> None:
@@ -99,16 +126,26 @@ async def _run(args: argparse.Namespace) -> int:
             notifier.start()
 
         adapter = get_adapter(config.portal.adapter)(config, http, creds)
-        poller = Poller(config, adapter, notifier, store)
+        poller = Poller(
+            config, adapter, notifier, store, dashboard_dir=paths.dashboard_dir(config.name)
+        )
         mode = "DRY RUN" if config.dry_run else "LIVE"
         print(f"shift-agent starting for {config.name} [{mode}, claim_mode={config.claim_mode.value}]")
         try:
+            await adapter.start()
             if args.once:
                 print(await poller.run_once())
             else:
                 await poller.run_forever()
         except KeyboardInterrupt:
             print("\nstopped")
+        except Exception as exc:
+            # A shipped app must never show a non-technical user a traceback.
+            # Scrubbed because portal errors routinely carry session tokens.
+            print(f"\nStopped: {scrub(exc)}", file=sys.stderr)
+            print("Run with -v for the full technical detail.", file=sys.stderr)
+            logging.getLogger(__name__).debug("fatal error", exc_info=True)
+            return 1
         finally:
             await notifier.close()
             await adapter.close()
@@ -324,6 +361,18 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     _configure_logging(args.verbose)
+    _configure_browsers()
+
+    if getattr(args, "command", None) == "run" and not browsers_available():
+        print(
+            "The browser files are missing.\n\n"
+            "If you unzipped the download, make sure the 'browsers' folder is\n"
+            "still next to ShiftAgent.exe - moving the .exe on its own breaks it.\n"
+            "Re-extract the whole zip and try again.",
+            file=sys.stderr,
+        )
+        return 1
+
     return asyncio.run(args.func(args))
 
 

@@ -56,6 +56,14 @@ class PortalAdapter(ABC):
         self.http = http
         self.secrets = secrets
 
+    async def start(self) -> None:
+        """Acquire whatever the adapter needs before polling begins.
+
+        Separate from `__init__` because it may launch a browser, which is slow
+        and must be awaited. Called once by the runner; `close()` releases it.
+        """
+        return None
+
     @abstractmethod
     async def is_authenticated(self) -> bool:
         """Cheap liveness probe. Must not perform a full login."""
