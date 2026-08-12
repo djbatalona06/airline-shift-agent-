@@ -1,0 +1,45 @@
+<!--
+  SYNTHETIC fixture - pairing detail, reached from the flight-number link.
+
+  This is where the position grade lives. The real page carries a crew
+  complement string of the form FA01FB01FC01FD01FE01, meaning positions A-E
+  with one seat each. The OPEN position - the one being offered - is marked
+  separately; here it is the "Open Position" row.
+
+  Mirrors the layout in docs/RECON-FINDINGS.md:
+    'M4A76 : 04AUG' | 'Base/Equip: MCO/4FA' | 'FA01FB01FC01FD01FE01'
+    day table: DY DD DH C FLTNO DPS-ARS DEPL ARRL BLKT GRNT OA TBLK TDHD
+-->
+<html>
+<head><title>Pairing detail</title></head>
+<body>
+<table>
+  <tr>
+    <td>M4A76 : 14AUG</td><td>ONLY ON THU</td>
+    <td>BSE REPT: 0900L</td><td>Operates: Aug 14 Only</td>
+  </tr>
+  <tr>
+    <td>Base/Equip: MCO/4FA</td>
+    <td>FA01FB01FC01FD01FE01</td>
+  </tr>
+  <tr>
+    <td>Open Position:</td><td>E</td>
+  </tr>
+  <tr>
+    <td>DY</td><td>DD</td><td>DH</td><td>C</td><td>FLTNO</td><td>DPS-ARS</td>
+    <td>DEPL</td><td>ARRL</td><td>BLKT</td><td>GRNT</td><td>OA</td>
+    <td>&nbsp;</td><td>TBLK</td><td>TDHD</td>
+  </tr>
+  <tr>
+    <td>1</td><td>14</td><td>&nbsp;</td><td>&nbsp;</td><td>2841</td>
+    <td>MCO-ATL</td><td>1000</td><td>1130</td><td>1.30</td><td>&nbsp;</td>
+    <td>&nbsp;</td><td>&nbsp;</td><td>6.00</td><td>0.00</td>
+  </tr>
+  <tr>
+    <td>1</td><td>14</td><td>&nbsp;</td><td>&nbsp;</td><td>2907</td>
+    <td>ATL-MCO</td><td>1430</td><td>1600</td><td>1.30</td><td>&nbsp;</td>
+    <td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td><td>&nbsp;</td>
+  </tr>
+</table>
+</body>
+</html>

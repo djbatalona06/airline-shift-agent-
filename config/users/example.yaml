@@ -1,0 +1,85 @@
+# Example configuration. Copy to config/users/<name>.yaml and edit.
+#
+# Credentials are NOT stored here. They live in the OS keychain (Windows
+# Credential Manager) and are written by the setup wizard, never by hand.
+
+name: example
+
+portal:
+  adapter: mock              # swap for the real adapter once recon is done
+  base_url: https://portal.example.invalid
+  username: her.username
+  options: {}
+
+availability:
+  timezone: America/New_York   # IANA name; times below are in THIS zone
+
+  slots:
+    - { day: Monday,    start: "08:00", end: "17:00" }
+    - { day: Tuesday,   start: "08:00", end: "17:00" }
+    - { day: Wednesday, start: "08:00", end: "17:00" }
+    # A night window: end <= start means it crosses midnight (Fri 22:00 -> Sat 06:00)
+    - { day: Friday,    start: "22:00", end: "06:00" }
+
+  excluded_dates:
+    - 2026-12-25
+
+rules:
+  min_rest_hours: 10         # minimum gap from any already-assigned shift
+  min_lead_minutes: 0        # 0 = must simply start in the future
+  max_weekly_hours: null     # null = no cap
+  max_shifts_per_week: null
+
+  # If she is not legal for a shift the portal rejects it ("unable" / cancelled).
+  # Stop trying the same shift after this many failed attempts.
+  max_claim_attempts: 3
+
+# Domicile lock. The agent will ONLY ever consider shifts based here, and must
+# never change the portal's base selector.
+#
+# Picking up a trip from the wrong base does not mean a slightly worse shift -
+# it means being rostered out of a city she does not live in. A shift with an
+# unknown or missing base is refused, not assumed. Out-of-base shifts are
+# rejected silently rather than alerted, since the pot is full of them.
+#
+# Leave unset to disable for non-airline portals.
+home_base:
+  code: MCO
+
+# Position class on the aircraft (FLICA A-E letter grades).
+#
+# Anything NOT in `pursue` is alerted rather than claimed - including a grade
+# that fails to parse, or one the portal newly introduces. That is deliberate:
+# a markup change must never promote a grade she did not ask for into something
+# the agent goes after.
+#
+# Leave both lists empty to disable the feature, which is what any non-airline
+# portal should do.
+grades:
+  pursue: [E, D, B]
+  notify_only: [A, C]
+
+poll:
+  interval_seconds: 45
+  jitter_seconds: 15         # randomised so requests are not perfectly periodic
+  quiet_hours:
+    start: "23:00"
+    end: "06:00"
+
+notify:
+  telegram_chat_id: null     # filled in automatically by the setup wizard
+  confirm_timeout_minutes: 10
+  daily_digest_hour: 8
+
+# notify_only = alert only, never claim
+# confirm     = alert with Confirm/Skip buttons, claim only on explicit yes
+# auto        = claim silently (leave off until the dry run has proven itself)
+claim_mode: confirm
+
+# Dead-man's switch. The agent pings this after every successful cycle; an
+# external watcher alerts if the pings stop, which is the only way to detect a
+# powered-off laptop.
+healthcheck_url: null
+
+# Evaluate and notify, but never send a claim request. Start here.
+dry_run: true
