@@ -1,3 +1,7 @@
+# A clone of this repo checked out inside the working tree. Nested git repos
+# get committed as unusable gitlinks if staged.
+/airline-shift-agent-/
+
 # Python
 __pycache__/
 *.py[cod]
