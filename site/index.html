@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shift Agent — never miss an open shift again</title>
+<meta name="description" content="Watches your work portal for open shifts, checks them against your availability, and asks before claiming.">
+<style>
+:root {
+  --sp-2: .5rem; --sp-3: .75rem; --sp-4: 1rem; --sp-5: 1.5rem; --sp-6: 2rem; --sp-7: 3rem;
+  --bg: #f4f7fb; --surface: #fff; --ink: #0f2038; --ink-2: #4a6076; --line: #dbe4ef;
+  --accent: #1d5fa8; --accent-ink: #fff; --warn: #a4650a; --warn-bg: #fdf1dc;
+  --radius: 12px;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg:#0d0f12; --surface:#16191e; --ink:#e6e9ee; --ink-2:#a3abb8; --line:#272d36;
+          --accent:#7f9fd8; --accent-ink:#0d0f12; --warn:#d9a95f; --warn-bg:#2e2415; }
+}
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: var(--font); color: var(--ink); background-color: var(--bg);
+  background-image: repeating-linear-gradient(-20deg, rgba(29,95,168,.05) 0 2px, transparent 2px 140px);
+  background-attachment: fixed; line-height: 1.6; -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 900px; margin: 0 auto; padding: var(--sp-6) var(--sp-4) var(--sp-7); }
+h1 { font-size: 2.25rem; line-height: 1.15; margin: 0 0 var(--sp-3); }
+h2 { font-size: 1.4rem; margin: var(--sp-7) 0 var(--sp-3); }
+p { max-width: 62ch; }
+.lede { font-size: 1.15rem; color: var(--ink-2); }
+.badges { display: flex; gap: var(--sp-2); flex-wrap: wrap; margin-bottom: var(--sp-5); font-size: .8rem; }
+.badge { background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: .2rem .7rem; color: var(--ink-2); }
+.cta { display: flex; gap: var(--sp-3); flex-wrap: wrap; margin: var(--sp-5) 0; }
+.btn { display: inline-block; padding: .7rem 1.2rem; border-radius: 8px; text-decoration: none; font-weight: 600; border: 1px solid var(--line); color: var(--ink); background: var(--surface); }
+.btn-primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(240px,100%), 1fr)); gap: var(--sp-4); }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--sp-4); }
+.card h3 { margin: 0 0 var(--sp-2); font-size: 1rem; }
+.card p { margin: 0; color: var(--ink-2); font-size: .95rem; }
+table { width: 100%; border-collapse: collapse; font-size: .95rem; }
+th, td { text-align: left; padding: .55rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+code { font-family: var(--mono); font-size: .9em; background: var(--surface); padding: .1rem .35rem; border-radius: 4px; border: 1px solid var(--line); }
+pre { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: var(--sp-4); overflow-x: auto; }
+pre code { border: 0; background: none; padding: 0; }
+.note { background: var(--warn-bg); border-left: 3px solid var(--warn); border-radius: 0; padding: var(--sp-3) var(--sp-4); margin: var(--sp-5) 0; }
+footer { margin-top: var(--sp-7); padding-top: var(--sp-4); border-top: 1px solid var(--line); color: var(--ink-2); font-size: .85rem; }
+a { color: var(--accent); }
+@media (max-width: 600px) { h1 { font-size: 1.8rem; } .wrap { padding: var(--sp-5) var(--sp-3); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Shift Agent</h1>
+  <p class="lede">Watches your work portal for open shifts, checks each one against your
+  availability, and <strong>asks before it claims anything</strong>.</p>
+
+  <div class="badges">
+    <span class="badge">220 tests</span>
+    <span class="badge">No credentials stored</span>
+    <span class="badge">Runs on your machine</span>
+    <span class="badge">MIT licensed</span>
+  </div>
+
+  <div class="cta">
+    <a class="btn btn-primary" href="demo/">See the dashboard</a>
+    <a class="btn" href="https://github.com/djbatalona06/airline-shift-agent-">Source on GitHub</a>
+    <a class="btn" href="https://github.com/djbatalona06/airline-shift-agent-/blob/main/docs/INSTALL.md">Install guide</a>
+  </div>
+
+  <h2>The problem</h2>
+  <p>Good shifts get posted at 3am and are gone by morning. Refreshing a portal
+  all day isn't a plan, and neither is losing sleep over it.</p>
+
+  <h2>What it does</h2>
+  <div class="grid">
+    <div class="card"><h3>Watches</h3><p>Polls on a jittered interval, only during hours you choose, with quiet hours respected.</p></div>
+    <div class="card"><h3>Filters</h3><p>Checks availability, existing trips, minimum rest, weekly caps, home base and position class.</p></div>
+    <div class="card"><h3>Asks first</h3><p>Sends the shift to Telegram with Confirm and Skip. It only claims on an explicit yes.</p></div>
+    <div class="card"><h3>Knows when to stop</h3><p>Three failed attempts on a shift and it gives up rather than hammering the portal.</p></div>
+  </div>
+
+  <h2>What it refuses to do</h2>
+  <table>
+    <tr><th>Solve captchas</th><td>It pauses and asks you. Captcha-solving services are how accounts get flagged.</td></tr>
+    <tr><th>Judge legality</th><td>It enforces scheduling hygiene, not duty-time regulations. The portal is authoritative.</td></tr>
+    <tr><th>Change your base</th><td>Wrong domicile means being rostered out of a city you don't live in. Hard-blocked.</td></tr>
+    <tr><th>Guess</th><td>An unreadable position, unknown base, or unreachable page results in an alert — never a claim.</td></tr>
+  </table>
+
+  <h2>Getting it</h2>
+  <p><strong>Desktop app.</strong> Download, unzip, run. No Python, no install, no admin rights.</p>
+  <p><strong>From source.</strong></p>
+<pre><code>git clone https://github.com/djbatalona06/airline-shift-agent-.git
+cd airline-shift-agent-
+python -m venv .venv
+.venv/Scripts/python.exe -m pip install -e .
+.venv/Scripts/python.exe -m playwright install chromium
+python -m shift_agent.main demo</code></pre>
+  <p>Full instructions, including running it 24/7 on a small server:
+  <a href="https://github.com/djbatalona06/airline-shift-agent-/blob/main/docs/INSTALL.md">the install guide</a>.</p>
+
+  <div class="note">
+    <strong>Before you use this.</strong> Automated shift pickup may be restricted by
+    your employer's terms, your union agreement, or the portal's terms of service.
+    Check first — you are responsible for how you use it.
+  </div>
+
+  <h2>Privacy</h2>
+  <p>It never receives your password: you sign in yourself and it works with the
+  session you created. Anything it does keep goes in your operating system's
+  credential store. Nothing is sent anywhere except the portal you configure and,
+  if you set one up, your own Telegram bot. There is no telemetry.</p>
+
+  <footer>
+    Not affiliated with, endorsed by, or connected to any airline, healthcare provider,
+    or scheduling vendor. The demo dashboard contains entirely fabricated data.
+  </footer>
+
+</div>
+</body>
+</html>

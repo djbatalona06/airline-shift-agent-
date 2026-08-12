@@ -1,0 +1,579 @@
+<!doctype html>
+<html lang="en" data-theme="contrail">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shift agent</title>
+<style>
+/* ---------------------------------------------------------------------------
+   Design tokens. Every size, space, radius and colour resolves to a custom
+   property, so a theme is a palette swap rather than a rewrite. Themes are
+   selected by [data-theme] on <html>; the choice persists in localStorage.
+   --------------------------------------------------------------------------- */
+:root {
+  /* Spacing — 4px base, geometric. Used for gap and padding, never ad-hoc px. */
+  --sp-1: 0.25rem; --sp-2: 0.5rem;  --sp-3: 0.75rem; --sp-4: 1rem;
+  --sp-5: 1.5rem;  --sp-6: 2rem;    --sp-7: 3rem;
+
+  /* Type scale — 1.200 minor third off a 16px body. */
+  --fs-xs: 0.75rem; --fs-sm: 0.875rem; --fs-md: 1rem;
+  --fs-lg: 1.25rem; --fs-xl: 1.5rem;   --fs-2xl: 2rem;
+  --lh-tight: 1.25; --lh-body: 1.6;
+
+  --radius-sm: 6px; --radius-md: 10px; --radius-lg: 16px; --radius-pill: 999px;
+  --border-w: 1px;
+  --measure: 68ch;
+  --shell-max: 1240px;
+
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  --dur: 160ms;
+}
+
+/* Contrail — light, airy, navy ink, amber accent. */
+[data-theme="contrail"] {
+  --bg: #f4f7fb;      --surface: #ffffff;   --surface-2: #eef3f9;
+  --ink: #0f2038;     --ink-2: #4a6076;     --ink-3: #7c8ea3;
+  --line: #dbe4ef;
+  --accent: #1d5fa8;  --accent-ink: #ffffff;
+  --warn: #a4650a;    --warn-bg: #fdf1dc;
+  --good: #0f6e56;    --good-bg: #e2f4ee;
+  --bad:  #a32d2d;    --bad-bg:  #fbeaea;
+  --streak: rgba(29, 95, 168, 0.05);
+  --streak-2: rgba(186, 117, 23, 0.04);
+}
+
+/* Departure board — dark, amber, monospace numerals. */
+[data-theme="departure"] {
+  --bg: #0b1220;      --surface: #131e30;   --surface-2: #1b2942;
+  --ink: #e8eef7;     --ink-2: #9fb2c9;     --ink-3: #6d829c;
+  --line: #24344f;
+  --accent: #f0a92b;  --accent-ink: #1a1204;
+  --warn: #f0a92b;    --warn-bg: #33280f;
+  --good: #4fc79c;    --good-bg: #10322a;
+  --bad:  #f08a8a;    --bad-bg:  #3a1c1c;
+  --streak: rgba(240, 169, 43, 0.06);
+  --streak-2: rgba(255, 255, 255, 0.02);
+}
+
+/* Jetway — muted teal, high contrast, low saturation. */
+[data-theme="jetway"] {
+  --bg: #f2f6f5;      --surface: #ffffff;   --surface-2: #e7efed;
+  --ink: #12312c;     --ink-2: #45605a;     --ink-3: #7b938d;
+  --line: #d5e3df;
+  --accent: #0f6e56;  --accent-ink: #ffffff;
+  --warn: #8a5a12;    --warn-bg: #fbf0dc;
+  --good: #0f6e56;    --good-bg: #dcefe8;
+  --bad:  #8f2f2f;    --bad-bg:  #f8e7e7;
+  --streak: rgba(15, 110, 86, 0.05);
+  --streak-2: rgba(0, 0, 0, 0.02);
+}
+
+/* Night flight — near-black, cool, minimal. */
+[data-theme="night"] {
+  --bg: #0d0f12;      --surface: #16191e;   --surface-2: #1f242b;
+  --ink: #e6e9ee;     --ink-2: #a3abb8;     --ink-3: #6f7987;
+  --line: #272d36;
+  --accent: #7f9fd8;  --accent-ink: #0d0f12;
+  --warn: #d9a95f;    --warn-bg: #2e2415;
+  --good: #6fbfa0;    --good-bg: #142b24;
+  --bad:  #dd8b8b;    --bad-bg:  #2f1a1a;
+  --streak: rgba(127, 159, 216, 0.05);
+  --streak-2: rgba(255, 255, 255, 0.015);
+}
+
+/* Follow the OS unless the user has explicitly chosen. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme-locked]) { color-scheme: dark; }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body { margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font-sans);
+  font-size: var(--fs-md);
+  line-height: var(--lh-body);
+  color: var(--ink);
+  background-color: var(--bg);
+  /* Contrail streaks: two low-alpha bands at -20deg. Fixed so they read as
+     atmosphere rather than moving with content, and always behind it. */
+  background-image:
+    repeating-linear-gradient(-20deg, var(--streak) 0 2px, transparent 2px 140px),
+    repeating-linear-gradient(-20deg, var(--streak-2) 0 1px, transparent 1px 60px);
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+}
+
+.shell { max-width: var(--shell-max); margin: 0 auto; padding: var(--sp-5) var(--sp-4) var(--sp-7); }
+
+h1, h2, h3 { line-height: var(--lh-tight); margin: 0; font-weight: 600; }
+h1 { font-size: var(--fs-xl); }
+h2 { font-size: var(--fs-lg); margin-bottom: var(--sp-3); }
+h3 { font-size: var(--fs-md); }
+p  { margin: 0 0 var(--sp-3); max-width: var(--measure); }
+
+.masthead {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: var(--sp-3); margin-bottom: var(--sp-5);
+}
+.brand { display: flex; align-items: center; gap: var(--sp-3); }
+.brand-mark {
+  width: 40px; height: 40px; flex: 0 0 40px; border-radius: var(--radius-md);
+  background: var(--accent); color: var(--accent-ink);
+  display: grid; place-items: center; font-weight: 700;
+}
+.muted { color: var(--ink-2); font-size: var(--fs-sm); }
+.mono  { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+.pill {
+  display: inline-flex; align-items: center; gap: var(--sp-1);
+  padding: var(--sp-1) var(--sp-3); border-radius: var(--radius-pill);
+  font-size: var(--fs-xs); font-weight: 600; white-space: nowrap;
+}
+.pill-good { background: var(--good-bg); color: var(--good); }
+.pill-warn { background: var(--warn-bg); color: var(--warn); }
+.pill-bad  { background: var(--bad-bg);  color: var(--bad); }
+.pill-flat { background: var(--surface-2); color: var(--ink-2); }
+
+.controls { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
+select, button {
+  font: inherit; font-size: var(--fs-sm); color: var(--ink);
+  background: var(--surface); border: var(--border-w) solid var(--line);
+  border-radius: var(--radius-sm); padding: var(--sp-2) var(--sp-3);
+  cursor: pointer; transition: border-color var(--dur), background var(--dur);
+}
+select:hover, button:hover { border-color: var(--accent); }
+button:focus-visible, select:focus-visible, .tab:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+
+.tabs { display: flex; gap: var(--sp-1); border-bottom: var(--border-w) solid var(--line); margin-bottom: var(--sp-5); }
+.tab {
+  appearance: none; background: none; border: 0; border-bottom: 2px solid transparent;
+  padding: var(--sp-3) var(--sp-4); font-size: var(--fs-sm); font-weight: 600;
+  color: var(--ink-2); cursor: pointer; border-radius: 0;
+}
+.tab[aria-selected="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+.panel[hidden] { display: none; }
+
+/* Catalog grid. auto-fill, NOT auto-fit: with auto-fit a lone card stretches
+   the full viewport width and reads as broken layout. minmax(0,...) stops wide
+   children forcing a track past its share. */
+.catalog {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
+  gap: var(--sp-4);
+}
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(150px, 100%), 1fr));
+  gap: var(--sp-3); margin-bottom: var(--sp-5);
+}
+
+.card {
+  background: var(--surface); border: var(--border-w) solid var(--line);
+  border-radius: var(--radius-lg); padding: var(--sp-4);
+  display: flex; flex-direction: column; gap: var(--sp-2);
+  min-width: 0;
+}
+.card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-2); }
+.card-title { font-weight: 600; overflow-wrap: anywhere; }
+.metric { background: var(--surface); border: var(--border-w) solid var(--line);
+          border-radius: var(--radius-md); padding: var(--sp-4); }
+.metric-label { font-size: var(--fs-xs); color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.04em; }
+.metric-value { font-size: var(--fs-2xl); font-weight: 700; line-height: 1.1; }
+
+.grade {
+  display: inline-grid; place-items: center; width: 28px; height: 28px; flex: 0 0 28px;
+  border-radius: var(--radius-sm); font-weight: 700; font-size: var(--fs-sm);
+  background: var(--surface-2); color: var(--ink-2);
+}
+.grade-pursue { background: var(--accent); color: var(--accent-ink); }
+.grade-alert  { background: var(--warn-bg); color: var(--warn); }
+
+.banner {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+  flex-wrap: wrap; padding: var(--sp-4); border-radius: var(--radius-lg);
+  border: var(--border-w) solid var(--line); background: var(--surface);
+  margin-bottom: var(--sp-5);
+}
+.banner-dry { border-color: var(--warn); background: var(--warn-bg); }
+
+.rows { border: var(--border-w) solid var(--line); border-radius: var(--radius-lg);
+        background: var(--surface); overflow: hidden; }
+.row { display: flex; justify-content: space-between; gap: var(--sp-4);
+       padding: var(--sp-3) var(--sp-4); border-bottom: var(--border-w) solid var(--line); }
+.row:last-child { border-bottom: 0; }
+.row dt { color: var(--ink-2); font-size: var(--fs-sm); margin: 0; }
+.row dd { margin: 0; text-align: right; overflow-wrap: anywhere; }
+
+.bars { display: grid; gap: var(--sp-2); }
+.bar-row { display: grid; grid-template-columns: minmax(0,10rem) 1fr auto; gap: var(--sp-3); align-items: center; font-size: var(--fs-sm); }
+.bar { height: 8px; border-radius: var(--radius-pill); background: var(--surface-2); overflow: hidden; }
+.bar > span { display: block; height: 100%; background: var(--accent); }
+
+.cal { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: var(--sp-2); }
+.cal-head { font-size: var(--fs-xs); color: var(--ink-3); text-align: center; text-transform: uppercase; letter-spacing: 0.04em; }
+.cal-day { background: var(--surface); border: var(--border-w) solid var(--line);
+           border-radius: var(--radius-sm); padding: var(--sp-2); min-height: 84px; font-size: var(--fs-xs); }
+.cal-day.is-out { opacity: 0.45; }
+.cal-ev { display: block; margin-top: var(--sp-1); padding: 2px var(--sp-1);
+          border-radius: var(--radius-sm); background: var(--surface-2); color: var(--ink-2);
+          overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal-ev.is-claimed { background: var(--good-bg); color: var(--good); }
+.cal-ev.is-alert   { background: var(--warn-bg); color: var(--warn); }
+.agenda { display: none; }
+.agenda .card { margin-bottom: var(--sp-3); }
+
+.empty { color: var(--ink-3); padding: var(--sp-6); text-align: center;
+         border: 1px dashed var(--line); border-radius: var(--radius-lg); }
+
+.footer { margin-top: var(--sp-6); color: var(--ink-3); font-size: var(--fs-xs); }
+
+/* --- Responsive ----------------------------------------------------------
+   The grids reflow on their own via auto-fill. These breakpoints handle the
+   things intrinsic sizing cannot: the month grid becoming unreadable when
+   narrow, and chrome needing to stack.
+   ------------------------------------------------------------------------- */
+@media (max-width: 1200px) { .shell { max-width: 100%; } }
+
+@media (max-width: 900px) {
+  :root { --sp-6: 1.5rem; --sp-7: 2rem; }
+  .row { flex-direction: column; gap: var(--sp-1); }
+  .row dd { text-align: left; }
+}
+
+@media (max-width: 600px) {
+  /* A seven-column month grid is unreadable on a phone. Swap to an agenda. */
+  .cal, .cal-head { display: none; }
+  .agenda { display: block; }
+  .masthead { align-items: flex-start; }
+  .tabs { overflow-x: auto; }
+  .bar-row { grid-template-columns: minmax(0, 7rem) 1fr auto; }
+}
+
+@media (max-width: 420px) {
+  :root { --fs-2xl: 1.625rem; --sp-4: 0.75rem; --sp-5: 1rem; }
+  .shell { padding: var(--sp-4) var(--sp-3) var(--sp-6); }
+  .tab { padding: var(--sp-2) var(--sp-3); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+
+@media print {
+  body { background: #fff; }
+  .tabs, .controls { display: none; }
+  .panel[hidden] { display: block !important; }
+}
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="masthead">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">SA</div>
+      <div>
+        <h1>Shift agent</h1>
+        <div class="muted mono" id="subtitle">loading</div>
+      </div>
+    </div>
+    <div class="controls">
+      <label class="muted" for="theme">Theme</label>
+      <select id="theme" aria-label="Colour theme">
+        <option value="contrail">Contrail</option>
+        <option value="departure">Departure board</option>
+        <option value="jetway">Jetway</option>
+        <option value="night">Night flight</option>
+      </select>
+      <span id="status-pill" class="pill pill-flat">—</span>
+    </div>
+  </header>
+
+  <div id="banner"></div>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab" role="tab" id="tab-overview"  aria-controls="panel-overview" aria-selected="true">Overview</button>
+    <button class="tab" role="tab" id="tab-settings"  aria-controls="panel-settings" aria-selected="false">Settings</button>
+    <button class="tab" role="tab" id="tab-calendar"  aria-controls="panel-calendar" aria-selected="false">Calendar</button>
+  </nav>
+
+  <section class="panel" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
+    <div class="metrics" id="metrics"></div>
+    <h2>Recent shifts</h2>
+    <div class="catalog" id="catalog"></div>
+    <h2 style="margin-top:var(--sp-6)">Why shifts were skipped</h2>
+    <div class="bars" id="breakdown"></div>
+  </section>
+
+  <section class="panel" id="panel-settings" role="tabpanel" aria-labelledby="tab-settings" hidden>
+    <h2>Agent</h2>
+    <dl class="rows" id="settings-agent"></dl>
+    <h2 style="margin-top:var(--sp-6)">Availability</h2>
+    <dl class="rows" id="settings-availability"></dl>
+    <h2 style="margin-top:var(--sp-6)">Shifts picked up</h2>
+    <div class="catalog" id="picked"></div>
+  </section>
+
+  <section class="panel" id="panel-calendar" role="tabpanel" aria-labelledby="tab-calendar" hidden>
+    <div class="controls" style="margin-bottom:var(--sp-4)">
+      <button id="cal-prev" aria-label="Previous month">&larr;</button>
+      <strong id="cal-label" class="mono">—</strong>
+      <button id="cal-next" aria-label="Next month">&rarr;</button>
+      <span style="flex:1"></span>
+      <a id="dl-ics" download="shifts.ics"><button type="button">Download .ics</button></a>
+      <button id="copy-md" type="button">Copy as markdown</button>
+    </div>
+    <div class="cal-head-wrap">
+      <div class="cal cal-head" id="cal-head"></div>
+      <div class="cal" id="cal-grid"></div>
+      <div class="agenda" id="agenda"></div>
+    </div>
+  </section>
+
+  <p class="footer" id="footer"></p>
+</div>
+
+<script id="payload" type="application/json">{{DATA}}</script>
+<script>
+(function () {
+  "use strict";
+
+  var DATA = {};
+  try {
+    DATA = JSON.parse(document.getElementById("payload").textContent || "{}");
+  } catch (e) {
+    document.getElementById("banner").innerHTML =
+      '<div class="banner banner-dry">Could not read dashboard data.</div>';
+    return;
+  }
+
+  var $ = function (id) { return document.getElementById(id); };
+  var esc = function (s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  };
+
+  var TZ = (DATA.timezone) || undefined;
+  function fmt(iso, opts) {
+    if (!iso) return "";
+    try { return new Date(iso).toLocaleString([], Object.assign({ timeZone: TZ }, opts)); }
+    catch (e) { return iso; }
+  }
+  var dayFmt  = { weekday: "short", day: "numeric", month: "short" };
+  var timeFmt = { hour: "2-digit", minute: "2-digit" };
+
+  /* ---- theme ---- */
+  var themeSel = $("theme");
+  var saved = null;
+  try { saved = localStorage.getItem("shift-agent-theme"); } catch (e) {}
+  if (!saved) {
+    var prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    saved = prefersDark ? "night" : "contrail";
+  }
+  function applyTheme(name) {
+    document.documentElement.setAttribute("data-theme", name);
+    document.documentElement.setAttribute("data-theme-locked", "");
+    themeSel.value = name;
+    try { localStorage.setItem("shift-agent-theme", name); } catch (e) {}
+  }
+  applyTheme(saved);
+  themeSel.addEventListener("change", function () { applyTheme(themeSel.value); });
+
+  /* ---- tabs ---- */
+  var tabs = [].slice.call(document.querySelectorAll(".tab"));
+  function selectTab(tab) {
+    tabs.forEach(function (t) {
+      var on = t === tab;
+      t.setAttribute("aria-selected", on ? "true" : "false");
+      $(t.getAttribute("aria-controls")).hidden = !on;
+    });
+  }
+  tabs.forEach(function (t) {
+    t.addEventListener("click", function () { selectTab(t); });
+    t.addEventListener("keydown", function (e) {
+      var i = tabs.indexOf(t);
+      if (e.key === "ArrowRight") { tabs[(i + 1) % tabs.length].focus(); tabs[(i + 1) % tabs.length].click(); }
+      if (e.key === "ArrowLeft")  { tabs[(i - 1 + tabs.length) % tabs.length].focus(); tabs[(i - 1 + tabs.length) % tabs.length].click(); }
+    });
+  });
+
+  /* ---- header ---- */
+  var st = DATA.status || {};
+  $("subtitle").textContent =
+    "last check " + (st.last_cycle_at ? fmt(st.last_cycle_at, timeFmt) : "never") +
+    "  ·  " + (DATA.timezone || "");
+  var pill = $("status-pill");
+  if (st.paused) { pill.className = "pill pill-bad";  pill.textContent = "Paused"; }
+  else           { pill.className = "pill pill-good"; pill.textContent = "Watching"; }
+
+  if (st.dry_run) {
+    $("banner").innerHTML =
+      '<div class="banner banner-dry"><div><strong>Dry run.</strong> ' +
+      'Shifts marked claimed below were <em>not</em> actually requested.</div>' +
+      '<span class="pill pill-warn">nothing is being claimed</span></div>';
+  } else if (st.paused && st.pause_reason) {
+    $("banner").innerHTML =
+      '<div class="banner"><div><strong>Paused.</strong> ' + esc(st.pause_reason) + "</div></div>";
+  }
+
+  /* ---- overview ---- */
+  var m = DATA.metrics || {};
+  var metricDefs = [
+    ["Seen", m.seen], ["Matched", m.matched], ["Claimed", m.claimed],
+    ["Alerts", m.alerts], ["Lost race", m.lost]
+  ];
+  if (m.dry_run_claims) metricDefs.push(["Dry-run claims", m.dry_run_claims]);
+  $("metrics").innerHTML = metricDefs.map(function (d) {
+    return '<div class="metric"><div class="metric-label">' + esc(d[0]) +
+           '</div><div class="metric-value">' + (d[1] || 0) + "</div></div>";
+  }).join("");
+
+  var pursue = (DATA.settings && DATA.settings.grades_pursue) || [];
+  function gradeClass(g) {
+    if (!g) return "grade";
+    return pursue.indexOf(String(g).toUpperCase()) >= 0 ? "grade grade-pursue" : "grade grade-alert";
+  }
+  function pillFor(s) {
+    if (s.claimed && s.dry_run) return '<span class="pill pill-warn">Claimed (dry run)</span>';
+    if (s.claimed)              return '<span class="pill pill-good">Claimed</span>';
+    if (s.verdict === "grade_notify_only")     return '<span class="pill pill-warn">Alert only</span>';
+    if (s.verdict === "max_attempts_reached")  return '<span class="pill pill-bad">Gave up</span>';
+    if (s.verdict === "match")                 return '<span class="pill pill-flat">Matched</span>';
+    return '<span class="pill pill-flat">' + esc(s.verdict_label) + "</span>";
+  }
+  function cardFor(s) {
+    return '<article class="card">' +
+      '<div class="card-head"><div class="card-title">' + esc(s.title || "Shift") + "</div>" +
+      (s.grade ? '<span class="' + gradeClass(s.grade) + '" title="Position grade">' + esc(s.grade) + "</span>" : "") +
+      "</div>" +
+      '<div class="mono muted">' + esc(fmt(s.start, dayFmt)) + " · " +
+      esc(fmt(s.start, timeFmt)) + (s.end ? "–" + esc(fmt(s.end, timeFmt)) : "") + "</div>" +
+      "<div>" + pillFor(s) + "</div>" +
+      (s.detail ? '<div class="muted">' + esc(s.detail) + "</div>" : "") +
+      "</article>";
+  }
+
+  var shifts = DATA.shifts || [];
+  var interesting = shifts.filter(function (s) { return s.interesting; });
+  var shown = (interesting.length ? interesting : shifts).slice(0, 24);
+  $("catalog").innerHTML = shown.length
+    ? shown.map(cardFor).join("")
+    : '<div class="empty">No shifts seen yet. The agent will fill this in as it runs.</div>';
+
+  var breakdown = DATA.verdicts || [];
+  var max = breakdown.reduce(function (a, b) { return Math.max(a, b.count); }, 0) || 1;
+  $("breakdown").innerHTML = breakdown.length ? breakdown.map(function (v) {
+    return '<div class="bar-row"><span class="muted">' + esc(v.label) + "</span>" +
+      '<span class="bar"><span style="width:' + Math.round((v.count / max) * 100) + '%"></span></span>' +
+      '<span class="mono">' + v.count + "</span></div>";
+  }).join("") : '<div class="empty">Nothing evaluated yet.</div>';
+
+  /* ---- settings ---- */
+  var cfg = DATA.settings || {};
+  function rows(el, pairs) {
+    $(el).innerHTML = pairs.map(function (p) {
+      return '<div class="row"><dt>' + esc(p[0]) + "</dt><dd>" + p[1] + "</dd></div>";
+    }).join("");
+  }
+  rows("settings-agent", [
+    ["Profile", esc(cfg.profile)],
+    ["Portal", esc(cfg.portal)],
+    ["Mode", esc(cfg.claim_mode)],
+    ["Dry run", cfg.dry_run ? '<span class="pill pill-warn">on</span>' : '<span class="pill pill-good">off</span>'],
+    ["Grades pursued", cfg.grades_enabled ? '<span class="mono">' + esc((cfg.grades_pursue || []).join(" ")) + "</span>" : "all"],
+    ["Grades alert only", cfg.grades_enabled ? '<span class="mono">' + esc((cfg.grades_notify || []).join(" ")) + "</span>" : "—"],
+    ["Attempts before giving up", esc(cfg.max_claim_attempts)],
+    ["Minimum rest", esc(cfg.min_rest_hours) + " h"],
+    ["Weekly cap", cfg.max_weekly_hours ? esc(cfg.max_weekly_hours) + " h" : "none"],
+    ["Check every", esc(cfg.poll_seconds) + " s"],
+    ["Quiet hours", cfg.quiet_hours ? '<span class="mono">' + esc(cfg.quiet_hours) + "</span>" : "none"],
+    ["Telegram", cfg.telegram_linked ? '<span class="pill pill-good">linked</span>' : '<span class="pill pill-flat">not linked</span>']
+  ]);
+  var av = (cfg.availability || []).map(function (s) {
+    return ['<span class="mono">' + esc(s.day) + "</span>",
+      '<span class="mono">' + esc(s.start) + "–" + esc(s.end) + "</span>" +
+      (s.overnight ? ' <span class="pill pill-flat">overnight</span>' : "")];
+  });
+  if (cfg.excluded_dates && cfg.excluded_dates.length) {
+    av.push(["Excluded", '<span class="mono">' + esc(cfg.excluded_dates.join(", ")) + "</span>"]);
+  }
+  rows("settings-availability", av.length ? av : [["No availability set", "—"]]);
+
+  var picked = shifts.filter(function (s) { return s.claimed; });
+  $("picked").innerHTML = picked.length
+    ? picked.map(cardFor).join("")
+    : '<div class="empty">Nothing picked up yet.</div>';
+
+  /* ---- calendar ---- */
+  var dated = shifts.filter(function (s) { return !!s.start; });
+  var cursor = new Date();
+  if (dated.length) {
+    var soonest = dated.slice().sort(function (a, b) { return new Date(a.start) - new Date(b.start); });
+    var upcoming = soonest.filter(function (s) { return new Date(s.start) >= new Date(); });
+    cursor = new Date((upcoming[0] || soonest[soonest.length - 1]).start);
+  }
+  cursor = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
+
+  var DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  $("cal-head").innerHTML = DOW.map(function (d) { return '<div class="cal-head">' + d + "</div>"; }).join("");
+
+  function eventClass(s) {
+    if (s.claimed && !s.dry_run) return "cal-ev is-claimed";
+    if (s.verdict === "grade_notify_only") return "cal-ev is-alert";
+    return "cal-ev";
+  }
+  function renderCalendar() {
+    var y = cursor.getFullYear(), mo = cursor.getMonth();
+    $("cal-label").textContent = cursor.toLocaleString([], { month: "long", year: "numeric" });
+
+    var first = new Date(y, mo, 1);
+    var offset = (first.getDay() + 6) % 7;           // Monday-first
+    var start = new Date(y, mo, 1 - offset);
+    var cells = [];
+    for (var i = 0; i < 42; i++) {
+      var day = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+      var key = day.toDateString();
+      var evs = dated.filter(function (s) { return new Date(s.start).toDateString() === key; });
+      cells.push(
+        '<div class="cal-day' + (day.getMonth() === mo ? "" : " is-out") + '">' +
+        '<span class="mono">' + day.getDate() + "</span>" +
+        evs.map(function (s) {
+          return '<span class="' + eventClass(s) + '" title="' + esc(s.title) + '">' +
+                 esc(s.grade ? s.grade + " " : "") + esc(s.title || "Shift") + "</span>";
+        }).join("") + "</div>"
+      );
+    }
+    $("cal-grid").innerHTML = cells.join("");
+
+    var upcoming = dated.slice().sort(function (a, b) { return new Date(a.start) - new Date(b.start); });
+    $("agenda").innerHTML = upcoming.length
+      ? upcoming.slice(0, 30).map(cardFor).join("")
+      : '<div class="empty">Nothing scheduled yet.</div>';
+  }
+  $("cal-prev").addEventListener("click", function () { cursor.setMonth(cursor.getMonth() - 1); renderCalendar(); });
+  $("cal-next").addEventListener("click", function () { cursor.setMonth(cursor.getMonth() + 1); renderCalendar(); });
+  renderCalendar();
+
+  $("dl-ics").setAttribute("href", DATA.ics_url || "shifts.ics");
+  $("copy-md").addEventListener("click", function () {
+    var md = DATA.markdown || "";
+    function done(ok) { $("copy-md").textContent = ok ? "Copied" : "Copy failed";
+      setTimeout(function () { $("copy-md").textContent = "Copy as markdown"; }, 1800); }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(md).then(function () { done(true); }, function () { done(false); });
+    } else { done(false); }
+  });
+
+  $("footer").textContent =
+    "Generated " + fmt(DATA.generated_at, { dateStyle: "medium", timeStyle: "short" }) +
+    ". This page shows your schedule only — it contains no passwords or tokens.";
+})();
+</script>
+</body>
+</html>

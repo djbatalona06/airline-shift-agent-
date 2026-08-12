@@ -1,0 +1,63 @@
+# A clone of this repo checked out inside the working tree. Nested git repos
+# get committed as unusable gitlinks if staged.
+/airline-shift-agent-/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# Build artifacts. The .exe ships as a GitHub Release asset, never committed.
+packaging/build/
+packaging/dist/
+packaging/release/
+packaging/*.spec
+build/
+dist/
+
+# ---------------------------------------------------------------------------
+# Personal and employer data. This repository is public.
+# ---------------------------------------------------------------------------
+
+# Real portal captures: live session cookies, personal details, and the
+# employer's internal application markup. Synthetic fixtures in
+# tests/fixtures/flica/*.html are the ones that ship.
+tests/fixtures/**/real/
+recon-capture*/
+*.har
+
+# Reconnaissance notes and the capture launcher. These describe a specific
+# employer's internal endpoints, column layouts and session handling, and name a
+# real crew base. Shipping an adapter is defensible; publishing a dossier on how
+# to reverse-engineer someone's employer is not. Keep these locally.
+docs/RECON-FINDINGS.md
+docs/RECON-CHECKLIST.md
+RUN-RECON.bat
+
+# Operational state - contains her roster.
+*.db
+*.db-wal
+*.db-shm
+
+# Generated dashboards contain a real schedule. Scoped deliberately: a bare
+# `dashboard/` also matches src/shift_agent/dashboard/, which is source code,
+# and silently excluding it produces a repo that cannot even import.
+site/demo/
+/dashboard/
+
+# Every user config except the documented example. These carry usernames,
+# home base, and availability.
+config/users/*.yaml
+config/users/*.yml
+!config/users/example.yaml
+
+# Secrets never belong in a file at all - they live in the OS keychain - but
+# refuse the common names anyway.
+.env
+*.key
+*.pem
+secrets.json

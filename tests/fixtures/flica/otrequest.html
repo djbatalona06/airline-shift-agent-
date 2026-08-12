@@ -1,0 +1,40 @@
+<!--
+  SYNTHETIC fixture - the requests list.
+
+  The Status column is the authoritative outcome of a request. "Unable" and
+  "Cancelled" appear HERE after the fact, not in the response to the add itself,
+  which is why the three-strike rule reads this page rather than the add reply.
+
+  Mirrors the header row recorded in docs/RECON-FINDINGS.md:
+    Requested (EDT) | Type | Status | Cancel /Hide | Comments
+-->
+<html>
+<head><title>Requests</title></head>
+<body>
+<table>
+  <tr><td colspan="5">Requests by CREWMEMBER (3)</td></tr>
+  <tr>
+    <td>Requested (EDT)</td><td>Type</td><td>Status</td>
+    <td>Cancel /Hide</td><td>Comments</td>
+  </tr>
+  <tr>
+    <td>Aug 11 21:40</td><td>PREM/ADD</td><td>Pending</td>
+    <td><input type="checkbox" name="Requests" value="M4A76"></td>
+    <td>&nbsp;</td>
+  </tr>
+  <tr>
+    <td>Aug 11 20:15</td><td>PREM/ADD</td><td>Unable</td>
+    <td><input type="checkbox" name="Requests" value="M7C21"></td>
+    <td>Rest requirement not met</td>
+  </tr>
+  <tr>
+    <td>Aug 10 18:02</td><td>PREM/ADD</td><td>Awarded</td>
+    <td><input type="checkbox" name="Requests" value="M2B08"></td>
+    <td>&nbsp;</td>
+  </tr>
+</table>
+<input type="hidden" name="Priorities" value="">
+<input type="hidden" name="Contingencies" value="">
+<input type="hidden" name="DeletedRequests" value="">
+</body>
+</html>

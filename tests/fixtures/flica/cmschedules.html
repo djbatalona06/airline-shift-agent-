@@ -1,0 +1,29 @@
+<!--
+  SYNTHETIC fixture - the crew member's own assigned schedule.
+
+  Used for conflict and minimum-rest checking. If this parses to an empty list
+  when she actually has trips, conflict detection silently disables itself and
+  the agent will happily claim something that clashes - so the adapter treats an
+  unparseable schedule as an error rather than as "no trips".
+-->
+<html>
+<head><title>My schedule</title></head>
+<body>
+<table>
+  <tr><td>Wk</td><td>Date</td><td>Pairing</td><td>Report</td><td>Release</td><td>Layover</td></tr>
+  <tr>
+    <td>33</td><td>2026-08-12</td><td>M1X09</td>
+    <td>0800</td><td>1500</td><td>-</td>
+  </tr>
+  <tr>
+    <td>33</td><td>2026-08-13</td><td>M3Z55</td>
+    <td>1300</td><td>2000</td><td>-</td>
+  </tr>
+  <tr>
+    <td>34</td><td>2026-08-18</td><td>M8Q12</td>
+    <td>0600</td><td>1400</td><td>DEN</td>
+  </tr>
+  <tr><td colspan="2">Block &nbsp;&nbsp;</td><td>59.42 &nbsp;&nbsp;</td></tr>
+</table>
+</body>
+</html>

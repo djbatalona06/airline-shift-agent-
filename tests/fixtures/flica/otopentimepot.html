@@ -1,0 +1,74 @@
+<!--
+  SYNTHETIC fixture. Hand-written to mirror the column layout and control names
+  recorded in docs/RECON-FINDINGS.md. Contains no real crew data and none of the
+  portal's actual markup, so it is safe to publish.
+
+  Structure it reproduces:
+    header row: Pairing Dates Days Report Depart Arrive "Blk Hrs" Credit
+                "Time in OT" Layover Prem
+    controls:   baseList, StartDate, EndDate, OptOrder, sortBtn, btnAdd
+    each Pairing cell links to RBCPair.cgi?PID=... which carries the position
+-->
+<html>
+<head><title>Daily Opentime Pot</title></head>
+<body>
+<form name="otForm" action="otopentimepot.cgi" method="post">
+<table>
+  <tr><td colspan="11">Last updated: Aug 11, 2026 21:49:28 EDT&nbsp;</td></tr>
+  <tr>
+    <td>&nbsp;</td>
+    <td>&nbsp; Base:
+      <select name="baseList">
+        <option value="ATL">ATL</option>
+        <option value="CHI">CHI</option>
+        <option value="CLE">CLE</option>
+        <option value="CVG">CVG</option>
+        <option value="DEN">DEN</option>
+        <option value="DFW">DFW</option>
+        <option value="LAS">LAS</option>
+        <option value="MCO" selected>MCO</option>
+        <option value="MIA">MIA</option>
+        <option value="PHX">PHX</option>
+        <option value="SJU">SJU</option>
+        <option value="TPA">TPA</option>
+        <option value="TTN">TTN</option>
+      </select>
+    </td>
+    <td>Daily Opentime Pot</td>
+  </tr>
+  <tr>
+    <td>Pairing</td><td>Dates</td><td>Days</td><td>Report</td><td>Depart</td>
+    <td>Arrive</td><td>Blk Hrs</td><td>Credit</td><td>Time in OT</td>
+    <td>Layover</td><td>Prem</td>
+  </tr>
+
+  <tr>
+    <td><a href="RBCPair.cgi?PID=M4A76&amp;DATE=20260814&amp;Splits=">M4A76</a></td>
+    <td>14AUG</td><td>1</td><td>0900</td><td>1000</td><td>1600</td>
+    <td>6.00</td><td>6.15</td><td>2:14</td><td>-</td><td>P</td>
+  </tr>
+  <tr>
+    <td><a href="RBCPair.cgi?PID=M7C21&amp;DATE=20260815&amp;Splits=">M7C21</a></td>
+    <td>15AUG</td><td>1</td><td>0730</td><td>0830</td><td>1410</td>
+    <td>5.40</td><td>5.55</td><td>0:42</td><td>-</td><td>P</td>
+  </tr>
+  <tr>
+    <td><a href="RBCPair.cgi?PID=M2B08&amp;DATE=20260816&amp;Splits=">M2B08</a></td>
+    <td>16AUG</td><td>1</td><td>1100</td><td>1200</td><td>1730</td>
+    <td>5.30</td><td>5.45</td><td>1:05</td><td>-</td><td>&nbsp;</td>
+  </tr>
+  <tr>
+    <td><a href="RBCPair.cgi?PID=M9E44&amp;DATE=20260817&amp;Splits=">M9E44</a></td>
+    <td>17AUG</td><td>2</td><td>1400</td><td>1500</td><td>2130</td>
+    <td>6.30</td><td>6.45</td><td>3:20</td><td>DEN</td><td>P</td>
+  </tr>
+</table>
+
+<input type="hidden" name="StartDate" value="20260811">
+<input type="hidden" name="EndDate" value="20260825">
+<input type="hidden" name="OptOrder" value="1">
+<input type="submit" name="sortBtn" value="Sort">
+<input type="submit" name="btnAdd" value="Add Request">
+</form>
+</body>
+</html>
