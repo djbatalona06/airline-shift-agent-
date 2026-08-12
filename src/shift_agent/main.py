@@ -84,7 +84,14 @@ def _build_notifier(config: UserConfig, store: Store, http: httpx.AsyncClient):
     Falling back to console rather than failing keeps the agent monitoring even
     before the chat transport is set up.
     """
-    token = secrets.get(config.name, "telegram_token")
+    try:
+        token = secrets.get(config.name, "telegram_token")
+    except secrets.SecretsUnavailable as exc:
+        # Same principle as a missing token: keep monitoring on the console
+        # rather than taking the agent down over its notification transport.
+        print(f"Could not read the stored Telegram token ({scrub(exc)}) - using console output.")
+        return ConsoleNotifier(tz=config.availability.tz)
+
     if not token:
         print("No Telegram token stored - using console output. "
               "Run 'shift-agent set-token' then 'shift-agent link' to enable Telegram.")
@@ -118,7 +125,16 @@ async def _run(args: argparse.Namespace) -> int:
 
     store = Store(args.state)
     store.set("schedule_summary", _schedule_summary(config))
-    creds = secrets.load_portal_secrets(config.name)
+    try:
+        creds = secrets.load_portal_secrets(config.name)
+    except secrets.SecretsUnavailable as exc:
+        # Reached before the scrubbed handler below, so it needs its own. A
+        # headless server with an unwritable data directory lands here.
+        store.close()
+        print(f"\nStopped: could not open the secret store ({scrub(exc)}).", file=sys.stderr)
+        print("Check that you own ~/.shift-agent and can write to it. See docs/VPS.md.",
+              file=sys.stderr)
+        return 1
 
     async with httpx.AsyncClient(timeout=30, follow_redirects=True) as http:
         notifier = _build_notifier(config, store, http)
