@@ -171,3 +171,15 @@ def load_portal_secrets(user: str) -> dict[str, Any]:
         "cookies": get_json(user, "portal_cookies", default=[]),
         "telegram_token": get(user, "telegram_token"),
     }
+
+
+LLM_KEY = "llm_api_key"
+
+
+def load_llm_secrets(user: str) -> dict[str, Any]:
+    """Deliberately not folded into `load_portal_secrets`.
+
+    That dict is handed straight to the portal adapter, which drives a browser
+    against an employer's site. An LLM key has no business travelling into it.
+    """
+    return {"api_key": get(user, LLM_KEY)}

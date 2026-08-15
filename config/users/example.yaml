@@ -14,12 +14,22 @@ portal:
 availability:
   timezone: America/New_York   # IANA name; times below are in THIS zone
 
+  # One block per window. Written out longhand rather than on one line each so
+  # the chat assistant can edit this file without reformatting it around you.
   slots:
-    - { day: Monday,    start: "08:00", end: "17:00" }
-    - { day: Tuesday,   start: "08:00", end: "17:00" }
-    - { day: Wednesday, start: "08:00", end: "17:00" }
+    - day: Monday
+      start: "08:00"
+      end: "17:00"
+    - day: Tuesday
+      start: "08:00"
+      end: "17:00"
+    - day: Wednesday
+      start: "08:00"
+      end: "17:00"
     # A night window: end <= start means it crosses midnight (Fri 22:00 -> Sat 06:00)
-    - { day: Friday,    start: "22:00", end: "06:00" }
+    - day: Friday
+      start: "22:00"
+      end: "06:00"
 
   excluded_dates:
     - 2026-12-25
@@ -70,6 +80,36 @@ notify:
   telegram_chat_id: null     # filled in automatically by the setup wizard
   confirm_timeout_minutes: 10
   daily_digest_hour: 8
+
+# The chat bubble on the dashboard. Off until a key is stored with
+# `shift-agent set-llm-key` - this section only says which model to point it at.
+#
+# The assistant can read what the agent saw, skipped and picked up, and it can
+# PROPOSE a change to this file. It can never claim a shift, and nothing is
+# written until you press Apply on the diff it shows you.
+llm:
+  provider: anthropic        # anthropic | openai_compatible
+  model: claude-opus-5
+  effort: medium             # low | medium | high | xhigh | max
+  max_tokens: 4096
+
+  # proxy   = the local server holds the key and calls the model. Full access to
+  #           your history, and the key stays in the OS keychain.
+  # browser = the page calls the model itself. Use only when opening the
+  #           dashboard straight off disk with no server. The key is stored in
+  #           the browser instead, and the assistant can only see what is
+  #           already on the page.
+  mode: proxy
+
+  # Cap on how much of your history one answer may pull in.
+  max_shifts_in_context: 60
+
+  # For a local model, nothing leaves your machine at all:
+  #
+  # provider: openai_compatible
+  # base_url: http://127.0.0.1:11434/v1
+  # model: llama3.1
+  base_url: null
 
 # notify_only = alert only, never claim
 # confirm     = alert with Confirm/Skip buttons, claim only on explicit yes

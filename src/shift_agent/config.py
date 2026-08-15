@@ -231,6 +231,69 @@ class Portal(_Base):
     options: dict[str, Any] = Field(default_factory=dict)
 
 
+class LlmProvider(str, Enum):
+    ANTHROPIC = "anthropic"
+    OPENAI_COMPATIBLE = "openai_compatible"
+
+
+class ChatMode(str, Enum):
+    PROXY = "proxy"
+    BROWSER = "browser"
+
+
+class Llm(_Base):
+    """The chat assistant on the dashboard. Off unless a key is stored.
+
+    No key material here. Like the portal password, the key lives in the OS
+    keychain and this section only says which model to point it at — a config
+    file gets copied, pasted into a support thread and committed by accident far
+    more often than a keychain entry does.
+
+    `provider: openai_compatible` with a localhost `base_url` is the option that
+    keeps the privacy promise in docs/SECURITY.md intact: nothing about her
+    roster leaves the machine. Anthropic is the default because it is the one
+    that works without installing anything else.
+    """
+
+    provider: LlmProvider = LlmProvider.ANTHROPIC
+    model: str = "claude-opus-5"
+
+    # Required for openai_compatible (Ollama, llama.cpp, LM Studio), ignored by
+    # the Anthropic client, which knows its own endpoint.
+    base_url: str | None = None
+
+    # Chat turns are short and someone is waiting on them, so this trades depth
+    # for latency. Raise it for a model that has to reason about a whole roster.
+    effort: str = Field(default="medium", pattern="^(low|medium|high|xhigh|max)$")
+    max_tokens: int = Field(default=4096, ge=256, le=64000)
+
+    # proxy  - the loopback server holds the key and calls the model. Full tools.
+    # browser- the page holds the key and calls the model itself. No tools, since
+    #          a file:// page has no way to reach the database.
+    mode: ChatMode = ChatMode.PROXY
+
+    # Ceiling on how much of her data one answer may pull in. Guards both the
+    # token bill and the blast radius of a prompt injection in a shift title.
+    max_shifts_in_context: int = Field(default=60, ge=1, le=200)
+
+    @model_validator(mode="after")
+    def _endpoint_present(self) -> Self:
+        if self.provider is LlmProvider.OPENAI_COMPATIBLE and not self.base_url:
+            raise ValueError(
+                "llm.base_url is required for provider 'openai_compatible' "
+                "(for example http://127.0.0.1:11434/v1 for Ollama)"
+            )
+        return self
+
+    @property
+    def needs_key(self) -> bool:
+        """A local endpoint on loopback needs no key; a hosted one always does."""
+        if self.provider is LlmProvider.ANTHROPIC:
+            return True
+        host = (self.base_url or "").lower()
+        return not any(marker in host for marker in ("127.0.0.1", "localhost", "[::1]"))
+
+
 class UserConfig(_Base):
     name: str
     portal: Portal
@@ -240,6 +303,7 @@ class UserConfig(_Base):
     grades: Grades = Field(default_factory=Grades)
     poll: Poll = Field(default_factory=Poll)
     notify: Notify = Field(default_factory=Notify)
+    llm: Llm = Field(default_factory=Llm)
     claim_mode: ClaimMode = ClaimMode.CONFIRM
     healthcheck_url: str | None = None
     dry_run: bool = True

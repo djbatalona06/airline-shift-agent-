@@ -78,7 +78,7 @@ def _schedule_summary(config: UserConfig) -> str:
     return "\n".join(lines)
 
 
-def _build_notifier(config: UserConfig, store: Store, http: httpx.AsyncClient):
+def _build_notifier(config: UserConfig, store: Store, http: httpx.AsyncClient, chat=None):
     """Telegram when a bot token is present, console otherwise.
 
     Falling back to console rather than failing keeps the agent monitoring even
@@ -104,6 +104,8 @@ def _build_notifier(config: UserConfig, store: Store, http: httpx.AsyncClient):
         link_code=secrets.get(config.name, "telegram_link_code"),
         chat_id=config.notify.telegram_chat_id,
         tz=config.availability.tz,
+        # One assistant, two front doors: /ask and the dashboard bubble share it.
+        chat_agent=chat.agent if chat is not None else None,
     )
     if notifier.linked_chat_id is None:
         print("Telegram token found but no chat linked yet. Run 'shift-agent link'.")
@@ -136,17 +138,33 @@ async def _run(args: argparse.Namespace) -> int:
               file=sys.stderr)
         return 1
 
+    dashboard_dir = paths.dashboard_dir(config.name)
+    chat = _build_chat(config, store, args.config)
+
+    # Serve for the life of the process rather than only while a window is open.
+    # A 24/7 agent is exactly when someone wants to ask it what it has been
+    # doing, and without this the chat bubble would be dead on the very page the
+    # poller keeps rewriting.
+    server = None
+    if chat is not None:
+        from .dashboard.server import DashboardServer
+
+        server = DashboardServer(dashboard_dir, chat=chat)
+
     async with httpx.AsyncClient(timeout=30, follow_redirects=True) as http:
-        notifier = _build_notifier(config, store, http)
+        notifier = _build_notifier(config, store, http, chat=chat)
         if isinstance(notifier, TelegramNotifier):
             notifier.start()
 
         adapter = get_adapter(config.portal.adapter)(config, http, creds)
         poller = Poller(
-            config, adapter, notifier, store, dashboard_dir=paths.dashboard_dir(config.name)
+            config, adapter, notifier, store, dashboard_dir=dashboard_dir, chat_backed=server is not None
         )
         mode = "DRY RUN" if config.dry_run else "LIVE"
         print(f"shift-agent starting for {config.name} [{mode}, claim_mode={config.claim_mode.value}]")
+        if server is not None:
+            dashboard_dir.mkdir(parents=True, exist_ok=True)
+            print(f"Dashboard and chat at {server.start()}")
         try:
             await adapter.start()
             if args.once:
@@ -163,10 +181,35 @@ async def _run(args: argparse.Namespace) -> int:
             logging.getLogger(__name__).debug("fatal error", exc_info=True)
             return 1
         finally:
+            if server is not None:
+                server.stop()
             await notifier.close()
             await adapter.close()
             store.close()
     return 0
+
+
+def _build_chat(config: UserConfig, store: Store, config_path: Path | None):
+    """Assemble the chat service, or return None with the reason printed.
+
+    Every failure here is non-fatal by design: a missing key or an unreachable
+    local model should cost the chat bubble, never the dashboard.
+    """
+    from .chat import ChatService, ProviderError, build_provider
+
+    try:
+        api_key = secrets.get(config.name, secrets.LLM_KEY)
+    except secrets.SecretsUnavailable as exc:
+        print(f"Chat disabled: could not read the secret store ({scrub(exc)}).")
+        return None
+
+    try:
+        provider = build_provider(config, api_key)
+    except ProviderError as exc:
+        print(f"Chat disabled: {exc}")
+        return None
+
+    return ChatService(store, config, provider, config_path=config_path)
 
 
 async def _dashboard(args: argparse.Namespace) -> int:
@@ -175,18 +218,22 @@ async def _dashboard(args: argparse.Namespace) -> int:
     config = UserConfig.load(args.config)
     outdir = args.out or paths.dashboard_dir(config.name)
     store = Store(args.state or paths.state_db(config.name))
+
+    # The store has to stay open while the window does, since the assistant
+    # reads it live. Without --open nothing serves the page, so the chat bubble
+    # would have no backend and says so instead of failing on first use.
+    chat = _build_chat(config, store, args.config) if args.open else None
     try:
-        index = build_dashboard(store, config, outdir)
+        index = build_dashboard(store, config, outdir, chat_backed=chat is not None)
+        print(f"Dashboard written to: {index}")
+        if args.open:
+            _open_window(index, chat)
     finally:
         store.close()
-
-    print(f"Dashboard written to: {index}")
-    if args.open:
-        _open_window(index)
     return 0
 
 
-def _open_window(index: Path) -> None:
+def _open_window(index: Path, chat=None) -> None:
     """Serve the dashboard on loopback and show it as an app window.
 
     Served over HTTP rather than opened as a file: browsers block the clipboard
@@ -195,7 +242,7 @@ def _open_window(index: Path) -> None:
     """
     from .dashboard.server import DashboardServer
 
-    server = DashboardServer(index.parent)
+    server = DashboardServer(index.parent, chat=chat)
     url = server.start()
     print(f"Serving at {url}")
     try:
@@ -262,6 +309,25 @@ async def _set_token(args: argparse.Namespace) -> int:
         return 1
     secrets.put(args.user, "telegram_token", token)
     print(f"Stored for user {args.user!r}. Next: shift-agent link --user {args.user}")
+    return 0
+
+
+async def _set_llm_key(args: argparse.Namespace) -> int:
+    """Store the chat assistant's API key in the OS keychain.
+
+    Same reasoning as the Telegram token above: read via getpass so it never
+    lands in shell history or the process list. A local Ollama endpoint on
+    loopback needs no key at all, which is the cheapest way to keep her roster
+    off anyone else's servers.
+    """
+    import getpass
+
+    key = getpass.getpass("API key (input hidden): ").strip()
+    if not key:
+        print("No key entered.", file=sys.stderr)
+        return 1
+    secrets.put(args.user, secrets.LLM_KEY, key)
+    print(f"Stored for user {args.user!r}. The chat bubble on the dashboard will pick it up.")
     return 0
 
 
@@ -374,6 +440,10 @@ def main(argv: list[str] | None = None) -> int:
     link = sub.add_parser("link", help="generate a one-time code to link a Telegram chat")
     link.add_argument("--user", default="default")
     link.set_defaults(func=_link)
+
+    llm_key = sub.add_parser("set-llm-key", help="store the chat assistant's API key in the OS keychain")
+    llm_key.add_argument("--user", default="default")
+    llm_key.set_defaults(func=_set_llm_key)
 
     args = parser.parse_args(argv)
     _configure_logging(args.verbose)
