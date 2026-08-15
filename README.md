@@ -14,7 +14,9 @@ asks you to confirm before it takes anything.
 Job-agnostic by design. Adding a new employer means writing one adapter class;
 everything else — scheduling, notifications, dashboard, packaging — is shared.
 
-**Status:** core complete, 231 tests. Every command in this README and in
+**Status:** core complete, 356 tests, plus 21 browser-driven tests that run the
+real adapter and the real dashboard against a fake portal on loopback. Every
+command in this README and in
 [docs/INSTALL.md](docs/INSTALL.md) has been executed and checked — see
 [docs/VERIFICATION.md](docs/VERIFICATION.md) for what passed and, more usefully,
 what is still unproven. The FLICA adapter's parsers are tested against fixtures;
@@ -77,7 +79,8 @@ Runs the whole pipeline on fabricated data — no config, credentials, or networ
 ## The dashboard
 
 Three tabs — Overview, Settings, Calendar — with four colour themes and a
-theme switcher that remembers your choice.
+theme switcher that remembers your choice, plus a chat bubble you can ask
+questions.
 
 - **Overview** — status, counts, and a card per shift showing its position grade
   and why it was or wasn't taken.
@@ -90,6 +93,28 @@ It is served on `127.0.0.1` with a random token in the URL, never on a public
 interface. Verified: a missing token, a wrong token, and a path-traversal
 attempt all return the same 404, and the port refuses connections from anything
 but loopback.
+
+### Asking it questions
+
+The cards tell you *what* happened. The chat bubble tells you *why*, and will
+answer a follow-up:
+
+> **why did you skip M8W77?**
+> It starts at 23:40 and your Friday window closes at 22:00.
+
+It can read what the agent saw, skipped and picked up, explain the rules in
+force, and propose a change to them — shown as a diff you press **Apply** on.
+It cannot claim a shift, sign in, or clear a challenge. Same assistant answers
+`/ask` in Telegram.
+
+```bash
+shift-agent set-llm-key        # stored in the OS keychain, never in a file
+```
+
+Claude by default. It also speaks to any OpenAI-compatible endpoint, and
+pointing `llm.base_url` at a local Ollama means **nothing leaves your machine**
+and no key is needed at all — see [docs/SECURITY.md](docs/SECURITY.md), which is
+explicit about what a hosted model does and does not receive.
 
 ---
 
@@ -119,6 +144,9 @@ unreachable detail page results in an alert, never a claim.
   `0600` file owned by the service account — weaker, and
   [documented as such](docs/SECURITY.md#where-things-are-stored).
 - The database and dashboard hold your schedule and **no secrets**.
+- **The chat assistant is off until you set it up**, and if you enable it with a
+  hosted model your questions and shift data go to that provider. A local model
+  keeps everything on your machine.
 - Nothing is sent anywhere except the portal you configure and, if you set it
   up, your own Telegram bot.
 
@@ -177,7 +205,22 @@ python -m venv .venv
 .venv/Scripts/python.exe -m pytest -q
 ```
 
-Tests run with no network, no browser, and no account.
+`pytest -q` runs with no network, no browser, and no account.
+
+The browser-driven tests are a second tier, deselected by default:
+
+```bash
+pytest -m e2e          # add xvfb-run -a on a headless Linux box
+```
+
+They start a fake FLICA on loopback — the real fixtures, plus the login,
+challenge and expired pages the fixtures never had — and drive the **real**
+adapter through Chromium: frames, the persistent profile, challenge detection
+and recovery, and whether a poll cycle actually sees new data. The same tier
+drives the dashboard's chat bubble against the real server and asserts the API
+key reaches neither the DOM nor `localStorage`, and that nothing leaves
+loopback. Building it found seven defects in the browser layer, listed in
+[docs/PARSING.md](docs/PARSING.md).
 
 The server path is verified in a throwaway Ubuntu container rather than by
 reading the script:
