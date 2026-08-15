@@ -113,6 +113,30 @@ async def browser_page(playwright):
 # --------------------------------------------------------------------------
 
 
+async def test_answering_from_stored_history_works_through_the_browser(tmp_path):
+    """A tool that reads the database, driven from the page. This is the shape
+    of nearly every real question, and it exercises the store from the server's
+    request thread rather than the one that opened it."""
+    server, url, store, _, _ = await serve(
+        tmp_path,
+        Reply(tool_calls=(ToolCall("t1", "explain_shift", {"shift_id": "M8W77"}),)),
+        Reply(text="It starts at 23:40, outside your Monday window."),
+    )
+    async with async_playwright() as pw:
+        browser, page, errors = await browser_page(pw)
+        try:
+            await page.goto(url)
+            await page.click("#chat-fab")
+            await page.fill("#chat-input", "why did you skip M8W77?")
+            await page.click("#chat-send")
+            await page.wait_for_selector("text=outside your Monday window", timeout=10_000)
+            assert errors == []
+        finally:
+            await browser.close()
+            server.stop()
+            store.close()
+
+
 async def test_chat_round_trip(tmp_path):
     server, url, store, _, _ = await serve(
         tmp_path, Reply(text="It starts at 23:40, outside your Monday window.")

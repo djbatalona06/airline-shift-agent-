@@ -82,7 +82,17 @@ class Store:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(self.path, isolation_level=None)
+        # check_same_thread=False because the dashboard server answers each
+        # request on its own thread, and the chat assistant reads this database
+        # from there while the poll loop writes to it from the main one. Without
+        # it every chat lookup fails with a thread-affinity error and the
+        # assistant can answer nothing.
+        #
+        # Safe here because sqlite3 is compiled serialized and every statement
+        # below is a single autocommit call — there are no multi-statement
+        # transactions to interleave. It is the smallest change that keeps the
+        # "no connection pool" decision in the module docstring honest.
+        self.db = sqlite3.connect(self.path, isolation_level=None, check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         # WAL + synchronous=FULL so a hard kill (Windows Update reboot mid-poll)

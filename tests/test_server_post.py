@@ -13,7 +13,11 @@ import urllib.request
 
 import pytest
 
+from shift_agent.chat.backend import ChatService
+from shift_agent.chat.providers import Reply, ToolCall
+from shift_agent.config import UserConfig
 from shift_agent.dashboard.server import GUARD_HEADER, MAX_BODY_BYTES, DashboardServer
+from shift_agent.store import Store
 
 
 class FakeChat:
@@ -190,6 +194,50 @@ def test_refusals_are_indistinguishable_from_a_missing_file(served):
 
 
 # -- no backend attached ---------------------------------------------------
+
+
+def test_store_reading_tools_work_from_a_request_thread(tmp_path):
+    """The server answers each request on its own thread while the poll loop
+    owns the store on the main one. A thread-bound sqlite connection makes
+    every lookup fail, so the assistant can answer nothing — and it fails
+    inside the tool, where it reads as a shrug rather than an error."""
+
+    class ToolUsingProvider:
+        name = "tool-user"
+
+        def __init__(self) -> None:
+            self.results: list = []
+
+        async def complete(self, *, system, messages, tools):
+            if not self.results:
+                self.results.append(messages)
+                return Reply(tool_calls=(ToolCall("t1", "get_status", {}),))
+            # Capture what the tool actually returned to the model.
+            self.results.append(messages[-1]["content"][0])
+            return Reply(text="done")
+
+        async def close(self) -> None:
+            return None
+
+    (tmp_path / "index.html").write_text("<html>x</html>", encoding="utf-8")
+    config = UserConfig.model_validate(
+        {"name": "t", "portal": {"adapter": "mock"}, "availability": {"timezone": "UTC"}}
+    )
+    store = Store(tmp_path / "state.db")
+    provider = ToolUsingProvider()
+    server = DashboardServer(tmp_path, chat=ChatService(store, config, provider))
+    server.start()
+    try:
+        status, body = post(server, "api/chat", {"question": "how are things?"})
+        assert status == 200 and body["ok"] is True
+        assert body["tools_used"] == ["get_status"]
+
+        tool_result = provider.results[-1]
+        assert tool_result["is_error"] is False, tool_result["content"]
+        assert "paused" in tool_result["content"]
+    finally:
+        server.stop()
+        store.close()
 
 
 def test_post_does_not_exist_without_a_chat_backend(tmp_path):
