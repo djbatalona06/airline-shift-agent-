@@ -353,7 +353,9 @@ async def test_alert_after_three_consecutive_failures(tmp_path):
 
     await poller.run_forever(max_cycles=3)
 
-    assert any(kind == "alert" for kind, _ in notifier.sent)
+    # "system", not "alert": this is the agent's own health, and Telegram marks
+    # the two differently so a stalled poller is not mistaken for a shift alert.
+    assert any(kind == "system" for kind, _ in notifier.sent)
     assert poller.consecutive_failures == 3
     # Backoff was applied between cycles rather than the flat poll interval.
     assert poller.slept == [90.0, 180.0]

@@ -120,6 +120,20 @@ class PortalAdapter(ABC):
         raising when another user got there first.
         """
 
+    async def check_outcome(self, shift_id: str) -> ClaimResult | None:
+        """Re-read a submitted request's real outcome, if the portal defers it.
+
+        Some portals accept a request and decide later. For those, `claim()`
+        returning CLAIMED means "submitted", and this is what turns it into a
+        decision — without it a rejection is invisible and the three-strikes
+        rule never fires.
+
+        Return None when the request is still pending: that is neither a
+        success nor a strike. The default returns None, which is correct for a
+        portal that decides synchronously and has nothing to re-check.
+        """
+        return None
+
     async def close(self) -> None:
         """Release browser/session resources. Override if needed."""
         return None

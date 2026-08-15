@@ -11,13 +11,18 @@ dependencies = [
     "pydantic>=2.9",
     "httpx>=0.27",
     "pyyaml>=6.0",
+    # Round-trip YAML, used only when the chat assistant edits the config file.
+    # pyyaml's dumper rewrites from parsed data and drops every comment, and in
+    # this project the config comments are the documentation.
+    "ruamel.yaml>=0.18",
     "tzdata>=2024.1",
     "keyring>=25.0",
     "playwright>=1.45",
+    "anthropic>=0.40",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "pytest-playwright>=0.5"]
 
 [project.scripts]
 shift-agent = "shift_agent.main:main"
@@ -29,3 +34,9 @@ where = ["src"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 asyncio_mode = "auto"
+# The default run stays browser-free and offline. If `pytest -q` ever needs
+# Chromium, something has started reaching out that shouldn't.
+addopts = "-m 'not e2e'"
+markers = [
+    "e2e: drives a real browser against a local fake portal. Run with -m e2e.",
+]

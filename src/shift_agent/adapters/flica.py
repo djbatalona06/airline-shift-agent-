@@ -31,6 +31,7 @@ from datetime import UTC, datetime, timedelta
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, NamedTuple
+from urllib.parse import urljoin
 from zoneinfo import ZoneInfo
 
 from .. import paths
@@ -46,8 +47,29 @@ MONTHS = {m: i for i, m in enumerate(
 # Statuses on otrequest.cgi that mean the request did not succeed.
 FAILED_STATUSES = {"unable", "cancelled", "canceled", "denied", "rejected", "expired"}
 AWARDED_STATUSES = {"awarded", "granted", "approved"}
+# Not yet decided. Distinct from both success and failure: counting a pending
+# request as either would be wrong, and counting it as a failure would burn a
+# strike against a request that may still be awarded.
+PENDING_STATUSES = {"pending", "submitted", "queued", "in progress", "waiting"}
 
-CAPTCHA_MARKERS = ("g-recaptcha", "recaptcha/api.js", "hcaptcha", "cf-turnstile")
+# Kept in step with recon.CAPTCHA_SIGNATURES, which is the richer list because
+# it was written while actually looking at portals. The adapter's copy used to
+# be a subset, which meant a Cloudflare challenge served without the
+# `cf-turnstile` class read as "not signed in" instead of "challenge" — the same
+# NEEDS_HUMAN either way, but with a message that sent the user hunting for a
+# login form that was not there.
+CAPTCHA_MARKERS = (
+    "www.google.com/recaptcha",
+    "recaptcha/api.js",
+    "g-recaptcha",
+    "hcaptcha.com",
+    "h-captcha",
+    "hcaptcha",
+    "challenges.cloudflare.com",
+    "cf-turnstile",
+    "funcaptcha.com",
+    "arkoselabs.com",
+)
 
 
 class Cell(NamedTuple):
@@ -211,7 +233,12 @@ def parse_open_shifts(
         if end <= start:
             end += timedelta(days=1)                # crossed midnight
 
-        premium = bool(cells[10].strip()) and cells[10].strip().upper() not in {"-", "N"}
+        # Fail closed on anything unrecognised. config.py promises "a shift whose
+        # premium flag cannot be read is skipped rather than assumed premium",
+        # and the old rule ("anything that is not blank, - or N") did the
+        # opposite: a glyph nobody anticipated read as premium and, with
+        # premium_only on, became eligible to claim.
+        premium = _parse_premium(cells[10])
         pid = None
         if href:
             pid_match = re.search(r"PID=([^&\s]+)", href)
@@ -235,6 +262,25 @@ def parse_open_shifts(
             )
         )
     return out
+
+
+PREMIUM_TRUE = {"P", "PREM", "PREMIUM", "Y", "YES", "*"}
+PREMIUM_FALSE = {"", "-", "N", "NO", "–", "—"}
+
+
+def _parse_premium(cell: str) -> bool:
+    """True only for a value known to mean premium.
+
+    An unfamiliar value is not premium. That is the whole point: the flag gates
+    `rules.premium_only`, so guessing wrong in the permissive direction puts a
+    shift she did not want into the claimable set.
+    """
+    value = (cell or "").strip().upper()
+    if value in PREMIUM_TRUE:
+        return True
+    if value not in PREMIUM_FALSE:
+        log.warning("unrecognised premium flag %r; treating as not premium", cell)
+    return False
 
 
 def parse_position(html: str) -> str | None:
@@ -408,6 +454,12 @@ class FlicaAdapter(PortalAdapter):
         self._playwright: Any = None
         self._position_cache: dict[str, str | None] = {}
         self._tz = config.availability.timezone
+        # How long to let a reloaded frame settle before reading it. A CGI page
+        # this small renders well inside this; configurable because a slow link
+        # would otherwise read a half-built table as "no shifts".
+        self._reload_settle_ms = int(
+            (config.portal.options or {}).get("reload_settle_ms", 1200)
+        )
 
     # --- browser lifecycle --------------------------------------------------
 
@@ -457,27 +509,102 @@ class FlicaAdapter(PortalAdapter):
 
     # --- browser plumbing ---------------------------------------------------
 
+    def _frame(self, needle: str):
+        if self._page is None:
+            return None
+        for frame in self._page.frames:
+            if needle in (frame.url or ""):
+                return frame
+        return None
+
+    async def _await_frame(self, needle: str):
+        """Find a frame, giving it a moment to attach if it has not yet.
+
+        `domcontentloaded` on the outer document fires before the child frames
+        exist, so a fetch immediately after start-up would find nothing and
+        report an empty open-time list — indistinguishable from a genuinely
+        empty pot. Waiting turns a race into a slightly slower first cycle.
+        """
+        frame = self._frame(needle)
+        if frame is not None or self._page is None:
+            return frame
+
+        deadline = self._reload_settle_ms * 8
+        waited = 0
+        while waited < deadline:
+            await self._page.wait_for_timeout(100)
+            waited += 100
+            frame = self._frame(needle)
+            if frame is not None:
+                return frame
+        return None
+
+    def _absolute(self, url: str | None, relative_to: str) -> str | None:
+        """Resolve a portal link against the frame it was scraped from.
+
+        FLICA's hrefs are relative (`RBCPair.cgi?PID=...`). Navigating a blank
+        new page to one of those fails outright, which meant every enrich raised
+        and the poller fell back to alert-only for every shift — the agent would
+        have run for a week claiming nothing and looking fine.
+        """
+        if not url:
+            return None
+        if url.startswith(("http://", "https://")):
+            return url
+        frame = self._frame(relative_to)
+        base = (frame.url if frame is not None else None) or self.config.portal.base_url
+        return urljoin(base, url) if base else None
+
     async def _frame_html(self, needle: str) -> str | None:
         """HTML of the first frame whose URL contains `needle`.
 
         Frame-aware because FLICA nests its content; the top-level document
         contains no tables at all.
         """
-        if self._page is None:
+        frame = await self._await_frame(needle)
+        if frame is None:
             return None
-        for frame in self._page.frames:
-            if needle in (frame.url or ""):
-                try:
-                    return await frame.content()
-                except Exception:
-                    continue
-        return None
+        try:
+            return await frame.content()
+        except Exception:
+            return None
+
+    async def _refresh(self, needle: str) -> str | None:
+        """Reload a frame, then return its HTML.
+
+        Without this the adapter reads whatever DOM happened to be present when
+        the browser started, forever. Every cycle would re-parse the same open
+        time list, so a shift posted after start-up would never be seen and the
+        agent would look healthy while doing nothing — the worst failure this
+        project can have, because it is silent.
+
+        A reload failure is not fatal: falling back to the current DOM is how a
+        transient portal blip degrades to stale data rather than to no data.
+        """
+        frame = await self._await_frame(needle)
+        if frame is None:
+            return None
+        try:
+            await frame.evaluate("() => window.location.reload()")
+            await self._page.wait_for_timeout(self._reload_settle_ms)
+        except Exception as exc:
+            log.warning("could not refresh %s: %s", needle, scrub(exc))
+        return await self._frame_html(needle)
 
     async def is_authenticated(self) -> bool:
         if self._page is None:
             return False
         html = await self._frame_html(self.OPENTIME)
-        return bool(html) and not has_captcha(html or "")
+        if not html:
+            return False
+        # Scan the whole page too. A challenge can be rendered in a sibling frame
+        # or the top-level document while the open-time frame still holds its
+        # last good markup, which used to read as a healthy session.
+        try:
+            page_html = await self._page.content()
+        except Exception:
+            page_html = ""
+        return not has_captcha(html) and not has_captcha(page_html)
 
     async def login(self) -> AuthResult:
         """Open the portal and hand any challenge to the human.
@@ -506,10 +633,13 @@ class FlicaAdapter(PortalAdapter):
     # --- data ---------------------------------------------------------------
 
     async def fetch_open_shifts(self) -> list[Shift]:
-        html = await self._frame_html(self.OPENTIME)
+        html = await self._refresh(self.OPENTIME)
         return parse_open_shifts(html, self._tz) if html else []
 
     async def fetch_my_schedule(self) -> list[Shift]:
+        # Not reloaded: an assigned roster changes on the scale of days, and a
+        # second reload per cycle doubles the request footprint against a portal
+        # that is already watching how often we call.
         html = await self._frame_html(self.SCHEDULE)
         return parse_schedule(html, self._tz) if html else []
 
@@ -519,7 +649,7 @@ class FlicaAdapter(PortalAdapter):
         if pid in self._position_cache:
             position = self._position_cache[pid]
         else:
-            url = shift.meta.get("detail_url")
+            url = self._absolute(shift.meta.get("detail_url"), self.OPENTIME)
             if not url or self._page is None:
                 return shift
             page = await self._page.context.new_page()
@@ -555,13 +685,48 @@ class FlicaAdapter(PortalAdapter):
             return ClaimResult(ClaimOutcome.ERROR, f"could not submit request: {exc}")
         return ClaimResult(ClaimOutcome.CLAIMED, "request submitted; awaiting status")
 
-    async def check_outcome(self, shift_id: str) -> ClaimResult:
-        html = await self._frame_html(self.REQUESTS)
+    async def _requests_html(self) -> str | None:
+        """The requests page, whether or not it is currently on screen.
+
+        It is only a frame when the user happens to have that tab open, so
+        falling back to fetching it in a background page is what makes outcome
+        reconciliation work during ordinary operation rather than by luck.
+        """
+        if self._frame(self.REQUESTS) is not None:
+            return await self._refresh(self.REQUESTS)
+
+        url = self._absolute(self.REQUESTS, self.OPENTIME)
+        if not url or self._page is None:
+            return None
+        page = await self._page.context.new_page()
+        try:
+            await page.goto(url, wait_until="domcontentloaded")
+            return await page.content()
+        except Exception as exc:
+            log.warning("could not read the requests page: %s", scrub(exc))
+            return None
+        finally:
+            await page.close()
+
+    async def check_outcome(self, shift_id: str) -> ClaimResult | None:
+        """Read the real decision from the requests page.
+
+        `claim()` only submits; FLICA decides later. Until the poller called
+        this, every submitted request counted as a success, `failed_attempts`
+        could never rise, and the three-strikes rule the README advertises did
+        nothing on the real adapter.
+
+        Returns None for "still pending", which is different from an error: a
+        pending request must not be counted as either a win or a strike.
+        """
+        html = await self._requests_html()
         if not html:
             return ClaimResult(ClaimOutcome.ERROR, "requests page unavailable")
         status = parse_request_statuses(html).get(shift_id)
         if status is None:
             return ClaimResult(ClaimOutcome.ERROR, "no request found")
+        if status.strip().lower() in PENDING_STATUSES:
+            return None
         return ClaimResult(status_outcome(status), status)
 
     async def close(self) -> None:
