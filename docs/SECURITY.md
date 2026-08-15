@@ -217,6 +217,11 @@ reviewed as a change to the threat model rather than as a feature.
 - `premium` failed open against a documented promise that it fails closed.
 - A stale challenge flag could let the agent silently undo a `/pause` a human
   had asked for.
+- `enrich()` followed whatever href the scraped markup contained. Fixing the
+  relative-URL bug meant those links started working, so link resolution is now
+  pinned to the portal's own origin — an absolute off-portal href would
+  otherwise have sent a browser holding live crew-session cookies wherever the
+  markup pointed.
 
 **Accepted risks, stated rather than mitigated:**
 

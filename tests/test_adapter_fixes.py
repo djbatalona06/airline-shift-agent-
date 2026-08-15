@@ -306,3 +306,44 @@ async def test_manual_pause_is_not_undone_by_a_stale_challenge_flag(tmp_path):
 
     assert (await poller.run_once()).skipped == "paused"
     assert store.get(PAUSED_KEY) is True
+
+
+# --------------------------------------------------------------------------
+# link resolution stays on the portal
+# --------------------------------------------------------------------------
+
+
+class _Frame:
+    def __init__(self, url: str) -> None:
+        self.url = url
+
+
+def _adapter_with_frame(frame_url: str, base_url: str = "https://flica.example/"):
+    config = make_config(portal={"adapter": "flica", "base_url": base_url})
+    from shift_agent.adapters.flica import FlicaAdapter
+
+    adapter = FlicaAdapter(config, None, {})
+    adapter._frame = lambda needle: _Frame(frame_url)
+    return adapter
+
+
+def test_relative_links_resolve_against_the_frame():
+    adapter = _adapter_with_frame("https://flica.example/cgi/otopentimepot.cgi")
+    resolved = adapter._absolute("RBCPair.cgi?PID=M4A76", "otopentimepot.cgi")
+    assert resolved == "https://flica.example/cgi/RBCPair.cgi?PID=M4A76"
+
+
+def test_off_portal_links_are_refused():
+    """These hrefs come out of scraped markup. Following an absolute one would
+    send a browser holding live crew-session cookies wherever it pointed."""
+    adapter = _adapter_with_frame("https://flica.example/cgi/otopentimepot.cgi")
+    assert adapter._absolute("https://evil.example/x", "otopentimepot.cgi") is None
+    assert adapter._absolute("//evil.example/x", "otopentimepot.cgi") is None
+
+
+def test_same_origin_absolute_links_are_allowed():
+    adapter = _adapter_with_frame("https://flica.example/cgi/otopentimepot.cgi")
+    assert (
+        adapter._absolute("https://flica.example/other.cgi", "otopentimepot.cgi")
+        == "https://flica.example/other.cgi"
+    )

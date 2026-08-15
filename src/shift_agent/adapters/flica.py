@@ -31,7 +31,7 @@ from datetime import UTC, datetime, timedelta
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, NamedTuple
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 from zoneinfo import ZoneInfo
 
 from .. import paths
@@ -549,11 +549,21 @@ class FlicaAdapter(PortalAdapter):
         """
         if not url:
             return None
-        if url.startswith(("http://", "https://")):
-            return url
         frame = self._frame(relative_to)
         base = (frame.url if frame is not None else None) or self.config.portal.base_url
-        return urljoin(base, url) if base else None
+        if not base:
+            return None
+
+        resolved = urljoin(base, url)
+
+        # Only ever follow a link back to the portal itself. These hrefs come out
+        # of scraped markup, so an absolute one would send a browser holding live
+        # crew-session cookies wherever that markup said. Nothing legitimate
+        # needs that, and refusing costs a grade we would fail closed on anyway.
+        if urlparse(resolved).netloc.lower() != urlparse(base).netloc.lower():
+            log.warning("refusing to follow an off-portal link: %s", resolved)
+            return None
+        return resolved
 
     async def _frame_html(self, needle: str) -> str | None:
         """HTML of the first frame whose URL contains `needle`.
