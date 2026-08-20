@@ -26,6 +26,7 @@ from __future__ import annotations
 import re
 import logging
 import os
+import sys
 from datetime import UTC, datetime, timedelta
 from html.parser import HTMLParser
 from pathlib import Path
@@ -354,6 +355,40 @@ def _headless_shell_available() -> bool:
     return any(Path(root).glob("chromium_headless_shell*"))
 
 
+class NoDisplayError(RuntimeError):
+    """Headed Chromium was asked for on a Linux box with no X display.
+
+    Its own class so a server misconfiguration is distinguishable from a portal
+    failure — this one is fixed by starting Xvfb, not by retrying.
+    """
+
+
+def _require_display() -> None:
+    """Fail early, and in English, when there is nowhere to draw the browser.
+
+    A VPS has no display. Chromium cannot start headed without one, and headed
+    is not optional here: FLICA shows a reCAPTCHA that a person has to click,
+    and this agent will not solve it. Playwright's own failure for this is a
+    wall of C++ launch output that tells a non-technical user nothing.
+
+    Windows and macOS always have a display, so the check is Linux-only.
+    """
+    if not sys.platform.startswith("linux") or os.environ.get("DISPLAY"):
+        return
+    raise NoDisplayError(
+        "No display is available, so the sign-in window cannot open.\n"
+        "\n"
+        "FLICA shows a 'confirm you are human' box that someone has to click, so\n"
+        "the browser has to run on a display even on a server.\n"
+        "\n"
+        "On the VPS, start the virtual display and try again:\n"
+        "\n"
+        "    sudo systemctl start shift-agent-xvfb\n"
+        "\n"
+        "Full walkthrough: docs/VPS.md"
+    )
+
+
 @register("flica")
 class FlicaAdapter(PortalAdapter):
     """Browser-driven FLICA adapter.
@@ -401,6 +436,9 @@ class FlicaAdapter(PortalAdapter):
             # it forever. Fall back rather than dying on a missing binary.
             log.warning("headless requested but the headless shell is not bundled; running headed")
             headless = False
+
+        if not headless:
+            _require_display()
 
         self._playwright = await async_playwright().start()
         self._context = await self._playwright.chromium.launch_persistent_context(

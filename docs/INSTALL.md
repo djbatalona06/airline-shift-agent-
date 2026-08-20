@@ -6,7 +6,7 @@ Three ways to run it. Pick the row that describes you.
 |---|---|---|
 | [Desktop app](#desktop-app) | Anyone. No technical setup | **Nothing.** Windows 10 or 11 |
 | [Localhost](#localhost) | Developers, or trying it out | Python 3.11+ and git |
-| [VPS](#vps-247) | Running it 24/7 | An Ubuntu server, ~2 GB RAM |
+| [VPS](#vps-247) | Running it 24/7 | An Ubuntu server, 2 GB RAM. See [VPS.md](VPS.md) |
 
 ---
 
@@ -114,8 +114,9 @@ claiming anything, so you can compare its choices against what you'd have picked
 
 ## VPS (24/7)
 
-Only worth it if the machine at home can't stay on. **Read the warning below
-first — for some portals a VPS is actively worse.**
+**Full walkthrough: [docs/VPS.md](VPS.md).** It is written for someone who has
+never used Linux, and it is one script rather than the page of hand-typed
+commands that used to live here.
 
 ### Before you choose this
 
@@ -236,14 +237,16 @@ The dashboard binds to `127.0.0.1` and stays there. Reach it through an SSH
 tunnel from your own machine:
 
 ```bash
-ssh -L 8765:127.0.0.1:8765 shiftagent@YOUR_SERVER_IP
+curl -fsSL https://raw.githubusercontent.com/djbatalona06/airline-shift-agent-/main/scripts/setup-vps.sh -o setup-vps.sh && bash setup-vps.sh
 ```
 
-Then open `http://127.0.0.1:8765` locally.
+Requirements: **Ubuntu 22.04 or 24.04**, **at least 2 GB RAM** (a real browser
+runs for the agent's whole life — there is no lightweight mode), 10 GB disk.
 
-**Do not open port 8765 in the firewall.** The dashboard contains your full
-roster, and an open port would put it on the internet behind nothing but a URL
-nobody has guessed yet.
+**Consider not doing this.** A datacenter address gets challenged more often
+than a home connection, and each challenge costs you a remote-view session
+rather than one click. If any computer you own can stay on, use that instead.
+[docs/VPS.md](VPS.md) opens with the comparison.
 
 ---
 
