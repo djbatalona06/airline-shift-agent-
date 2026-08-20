@@ -27,6 +27,7 @@ from .schedule import ScheduleEngine
 from .store import (
     LAST_CYCLE_KEY,
     LAST_DIGEST_KEY,
+    LOGIN_FAILURES_KEY,
     PAUSE_REASON_KEY,
     PAUSED_KEY,
     Store,
@@ -75,18 +76,19 @@ class Poller:
         engine: ScheduleEngine | None = None,
         sleep: Callable[[float], Awaitable[None]] | None = None,
         dashboard_dir: "Path | None" = None,
+        chat_url: str | None = None,
     ) -> None:
         self.config = config
         self.adapter = adapter
         self.notifier = notifier
         self.store = store
         self.dashboard_dir = dashboard_dir
+        self.chat_url = chat_url
         self.engine = engine or ScheduleEngine(config.availability, config.rules)
         # Injectable so tests can exercise multi-cycle backoff without actually
         # waiting out the exponential delay.
         self.sleep = sleep or asyncio.sleep
         self.consecutive_failures = 0
-        self.login_failures = 0
         self._tz = config.availability.tz
 
     # --- gating --------------------------------------------------------------
@@ -94,6 +96,22 @@ class Poller:
     @property
     def paused(self) -> bool:
         return bool(self.store.get(PAUSED_KEY, False))
+
+    @property
+    def login_failures(self) -> int:
+        """Consecutive failed logins, persisted rather than held in memory.
+
+        The breaker this feeds exists to stop before the portal locks her
+        account. An in-memory counter resets on every restart, so a supervisor
+        or a Windows Update reboot loop would let the agent keep hammering a
+        password that has changed - defeating the one guard that protects
+        something she would have to phone crew support to undo.
+        """
+        return int(self.store.get(LOGIN_FAILURES_KEY, 0) or 0)
+
+    @login_failures.setter
+    def login_failures(self, value: int) -> None:
+        self.store.set(LOGIN_FAILURES_KEY, int(value))
 
     def pause(self, reason: str = "") -> None:
         self.store.set(PAUSED_KEY, True)
@@ -125,15 +143,19 @@ class Poller:
         if not await self.adapter.is_authenticated():
             auth = await self.adapter.login()
             if auth.state is AuthState.NEEDS_HUMAN:
-                self.pause(auth.detail or "challenge")
+                # Scrubbed on the way out: `detail` and `challenge_url` come
+                # from the portal, Telegram is a third party, and a crew-portal
+                # URL can carry a session parameter. She still gets a usable
+                # link - see docs/SECURITY.md.
+                self.pause(scrub(auth.detail) if auth.detail else "challenge")
                 await self.notifier.needs_human(
-                    auth.detail or "The portal is asking for verification.",
-                    auth.challenge_url,
+                    scrub(auth.detail) if auth.detail else "The portal is asking for verification.",
+                    scrub(auth.challenge_url) if auth.challenge_url else None,
                 )
                 report.skipped = "needs_human"
                 return report
             if not auth.ok:
-                self.login_failures += 1
+                self.login_failures = self.login_failures + 1
                 limit = self.config.rules.max_login_failures
                 if self.login_failures >= limit:
                     # Circuit breaker. If her password changed, retrying forever
@@ -146,7 +168,11 @@ class Poller:
                     )
                     report.skipped = "login_locked_out"
                     return report
-                raise RuntimeError(f"login failed: {auth.detail}")
+                # Scrubbed at the raise, not just at the log: `_loop` forwards
+                # this exception's text to `notifier.alert`, which on Telegram
+                # leaves the machine. Portal error text routinely carries a
+                # session token.
+                raise RuntimeError(f"login failed: {scrub(auth.detail)}")
             self.login_failures = 0
 
         open_shifts = await self.adapter.fetch_open_shifts()
@@ -217,7 +243,7 @@ class Poller:
             # take shift monitoring down with it.
             from .dashboard import try_build_dashboard
 
-            try_build_dashboard(self.store, self.config, self.dashboard_dir)
+            try_build_dashboard(self.store, self.config, self.dashboard_dir, self.chat_url)
 
         await self._maybe_send_digest()
         return report
@@ -405,9 +431,11 @@ class Poller:
                 self.consecutive_failures += 1
                 log.exception("poll cycle failed (%d consecutive)", self.consecutive_failures)
                 if self.consecutive_failures == FAILURES_BEFORE_ALERT:
+                    # Scrubbed: this is the one error path that reaches a third
+                    # party, and `exc` is frequently a raw portal/browser error.
                     await self.notifier.alert(
                         f"Shift agent has failed {self.consecutive_failures} times in a row. "
-                        f"Latest error: {exc}"
+                        f"Latest error: {scrub(exc)}"
                     )
             cycles += 1
             if max_cycles is None or cycles < max_cycles:

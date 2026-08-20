@@ -80,6 +80,17 @@ Check it works — this needs no config, credentials, or network:
 python -m shift_agent.main demo
 ```
 
+The friction toolkit (a vision-model action loop for handling captchas/OTP on
+*other* portals — never this one's login) ships built in too:
+
+```bash
+shift-agent friction-set-vision-key --user me
+shift-agent friction-bench --user me
+```
+
+See [docs/FRICTION_TOOLKIT.md](FRICTION_TOOLKIT.md) — skip it entirely if
+you're only here to run the shift agent against FLICA.
+
 Then create your config and open the dashboard:
 
 ```bash
@@ -107,11 +118,123 @@ claiming anything, so you can compare its choices against what you'd have picked
 never used Linux, and it is one script rather than the page of hand-typed
 commands that used to live here.
 
-The short version of what changed and why: the agent drives a **visible**
-browser, because FLICA challenges the sign-in with a "confirm you are human" box
-and this agent refuses to solve one. A server has no screen, so the setup script
-installs a virtual screen and a way to look at it through an SSH tunnel. Doing
-that by hand is where this goes wrong, so it is scripted:
+### Before you choose this
+
+**A captcha will stop the agent until someone can reach that server's browser.**
+The challenge is tied to the session running on the VPS, so it cannot be
+forwarded to your phone. On your own PC you just click it.
+
+Datacenter IP addresses also score far worse with reCAPTCHA and look more
+suspicious to portals that watch for automation. **If your portal shows
+captchas, run it on a home computer instead.**
+
+### The friction toolkit works fine here, even though FLICA's captcha doesn't
+
+The warning above is about FLICA specifically: its captcha needs a human to
+click it, and a human can't reach a VPS's browser window. That does not apply
+to the friction toolkit (`shift-agent friction-bench`,
+`friction-set-vision-key`, `friction-set-imap-password`) — it never needs a
+human to look at the screen, because a vision model does that instead of you.
+It runs headless by default for exactly this reason, so it needs no display,
+no Xvfb, and no VNC setup on Ubuntu.
+
+Set the vision API key once, over the same SSH session you're already in:
+
+```bash
+shift-agent friction-set-vision-key --user shiftagent
+```
+
+It's an on-demand command, not part of the always-on service — no systemd
+changes needed. Run it manually whenever you want to use or re-benchmark it:
+
+```bash
+shift-agent friction-bench --user shiftagent
+```
+
+See [docs/FRICTION_TOOLKIT.md](FRICTION_TOOLKIT.md) for what it's for and
+what it doesn't cover.
+
+### Requirements
+
+- **Ubuntu LTS** (22.04 or 24.04)
+- **At least 2 GB RAM.** The agent drives a real browser — session cookies do
+  not work outside one, so there is no lightweight mode
+- 10 GB disk
+
+Any provider works. [Hostinger](https://www.hostinger.com/vps-hosting) is one of
+the cheaper ones — pick a **KVM** plan whose RAM meets the above. *No
+affiliation, no referral, not sponsored.*
+
+### Setup
+
+Create the VPS with the Ubuntu LTS template, then connect:
+
+```bash
+ssh root@YOUR_SERVER_IP
+```
+
+Make a normal user rather than running as root:
+
+```bash
+adduser shiftagent
+usermod -aG sudo shiftagent
+su - shiftagent
+```
+
+Install dependencies. `--with-deps` pulls the system libraries Chromium needs —
+there are a lot, and guessing them by hand is how this goes wrong:
+
+```bash
+sudo apt update
+sudo apt install -y python3-venv python3-pip git
+
+git clone https://github.com/djbatalona06/airline-shift-agent-.git
+cd airline-shift-agent-
+python3 -m venv .venv
+.venv/bin/python -m pip install -e .
+.venv/bin/python -m playwright install --with-deps chromium
+```
+
+Create your config:
+
+```bash
+cp config/users/example.yaml config/users/me.yaml
+nano config/users/me.yaml
+```
+
+### Run it as a service
+
+```bash
+sudo nano /etc/systemd/system/shift-agent.service
+```
+
+```ini
+[Unit]
+Description=Shift Agent
+After=network-online.target
+
+[Service]
+Type=simple
+User=shiftagent
+WorkingDirectory=/home/shiftagent/airline-shift-agent-
+ExecStart=/home/shiftagent/airline-shift-agent-/.venv/bin/python -m shift_agent.main run --config config/users/me.yaml
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now shift-agent
+journalctl -u shift-agent -f
+```
+
+### Reaching the dashboard — do not open a port
+
+The dashboard binds to `127.0.0.1` and stays there. Reach it through an SSH
+tunnel from your own machine:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/djbatalona06/airline-shift-agent-/main/scripts/setup-vps.sh -o setup-vps.sh && bash setup-vps.sh

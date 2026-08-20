@@ -211,3 +211,102 @@ def test_filter_never_drops_records():
 
     record = logging.LogRecord("x", logging.ERROR, __file__, 1, "password=abc", None, None)
     assert SecretScrubbingFilter().filter(record) is True
+
+
+# --- the breaker survives a restart ------------------------------------------
+
+async def test_failure_count_persists_across_a_restart(tmp_path):
+    """The breaker exists to stop before the portal locks her account. An
+    in-memory counter would let a supervisor or a reboot loop reset it and keep
+    hammering a password that has changed."""
+    poller, _, _, store = build(tmp_path, auth_state=AuthState.FAILED)
+
+    for _ in range(2):
+        with pytest.raises(RuntimeError):
+            await poller.run_once()
+
+    # A fresh Poller against the same profile - what a restart actually is.
+    restarted, _, notifier, _ = build(tmp_path, auth_state=AuthState.FAILED)
+    restarted.store = store
+    report = await restarted.run_once()
+
+    assert report.skipped == "login_locked_out"
+    assert store.get(PAUSED_KEY) is True
+
+
+async def test_a_successful_login_clears_the_count(tmp_path):
+    """Two bad attempts weeks apart must not add up to a lockout."""
+    poller, adapter, _, store = build(tmp_path, auth_state=AuthState.FAILED)
+
+    with pytest.raises(RuntimeError):
+        await poller.run_once()
+    assert poller.login_failures == 1
+
+    adapter._auth_state = AuthState.OK
+    adapter._authed = False
+    await poller.run_once()
+
+    assert poller.login_failures == 0
+
+
+# --- portal text never reaches a notifier unscrubbed --------------------------
+
+class LeakyAdapter(MockAdapter):
+    """Fails login with the kind of string a real portal error carries."""
+
+    LEAK = "session=DEADBEEF0123456789ABCDEF0123 for crew@airline.example"
+
+    async def login(self):
+        from shift_agent.models import AuthResult
+
+        return AuthResult(AuthState.FAILED, f"could not read page: {self.LEAK}")
+
+
+class LeakyChallengeAdapter(MockAdapter):
+    LEAK_URL = "https://portal.example/verify?sid=DEADBEEF0123456789ABCDEF0123"
+
+    async def login(self):
+        from shift_agent.models import AuthResult
+
+        return AuthResult(
+            AuthState.NEEDS_HUMAN, "verify you are human", challenge_url=self.LEAK_URL
+        )
+
+
+async def test_login_failure_text_is_scrubbed_before_it_leaves_the_machine(tmp_path):
+    """`_loop` forwards this exception's text to notifier.alert, which on
+    Telegram is a third party. logging_safe protected the log file but not the
+    one channel that actually leaves."""
+    config = make_config()
+    adapter = LeakyAdapter(config, auth_state=AuthState.FAILED)
+    notifier = ConsoleNotifier(auto_confirm=True)
+    store = Store(tmp_path / "state.db")
+
+    async def no_sleep(_):
+        return None
+
+    poller = Poller(config, adapter, notifier, store, sleep=no_sleep)
+    await poller.run_forever(max_cycles=3)
+
+    alerts = [text for kind, text in notifier.sent if kind == "alert"]
+    assert alerts, "expected the consecutive-failure alert"
+    blob = "\n".join(alerts)
+    assert "DEADBEEF0123456789ABCDEF0123" not in blob
+    assert "crew@airline.example" not in blob
+
+
+async def test_challenge_url_is_scrubbed_before_being_sent(tmp_path):
+    """She still gets a usable link; the session parameter in it does not go to
+    a third party verbatim."""
+    config = make_config()
+    adapter = LeakyChallengeAdapter(config, auth_state=AuthState.NEEDS_HUMAN)
+    notifier = ConsoleNotifier()
+    store = Store(tmp_path / "state.db")
+
+    poller = Poller(config, adapter, notifier, store)
+    report = await poller.run_once()
+
+    assert report.skipped == "needs_human"
+    sent = "\n".join(text for _, text in notifier.sent)
+    assert "DEADBEEF0123456789ABCDEF0123" not in sent
+    assert "portal.example" in sent

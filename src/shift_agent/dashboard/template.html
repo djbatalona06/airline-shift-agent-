@@ -231,6 +231,37 @@ button:focus-visible, select:focus-visible, .tab:focus-visible {
 .empty { color: var(--ink-3); padding: var(--sp-6); text-align: center;
          border: 1px dashed var(--line); border-radius: var(--radius-lg); }
 
+/* --- Chat ----------------------------------------------------------------
+   Fixed-height scroller rather than a growing page: the log has to stay put
+   while the composer keeps its position, or every reply shifts the input out
+   from under the cursor.
+   ------------------------------------------------------------------------- */
+.chat-log { height: min(58vh, 34rem); overflow-y: auto; display: flex;
+            flex-direction: column; gap: var(--sp-3); padding: var(--sp-4);
+            border: 1px solid var(--line); border-radius: var(--radius-lg);
+            background: var(--surface-2); }
+.chat-msg { max-width: min(46ch, 88%); padding: var(--sp-3) var(--sp-4);
+            border-radius: var(--radius-lg); line-height: var(--lh-body);
+            white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-msg.is-user  { align-self: flex-end; background: var(--accent);
+                     color: var(--accent-ink); }
+.chat-msg.is-agent { align-self: flex-start; background: var(--surface);
+                     border: 1px solid var(--line); }
+.chat-msg.is-system { align-self: center; background: transparent;
+                      color: var(--ink-3); font-size: var(--fs-sm);
+                      text-align: center; }
+.chat-meta { display: block; margin-top: var(--sp-1); font-size: var(--fs-xs);
+             opacity: .7; }
+.chat-form { display: flex; gap: var(--sp-2); align-items: flex-end;
+             margin-top: var(--sp-4); }
+.chat-form textarea { flex: 1; font: inherit; color: var(--ink);
+                      background: var(--surface); border: 1px solid var(--line);
+                      border-radius: var(--radius-md); padding: var(--sp-3);
+                      resize: vertical; min-height: 3rem; }
+.chat-form textarea:disabled { opacity: .6; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden;
+           clip: rect(0 0 0 0); white-space: nowrap; }
+
 .footer { margin-top: var(--sp-6); color: var(--ink-3); font-size: var(--fs-xs); }
 
 /* --- Responsive ----------------------------------------------------------
@@ -300,6 +331,7 @@ button:focus-visible, select:focus-visible, .tab:focus-visible {
     <button class="tab" role="tab" id="tab-overview"  aria-controls="panel-overview" aria-selected="true">Overview</button>
     <button class="tab" role="tab" id="tab-settings"  aria-controls="panel-settings" aria-selected="false">Settings</button>
     <button class="tab" role="tab" id="tab-calendar"  aria-controls="panel-calendar" aria-selected="false">Calendar</button>
+    <button class="tab" role="tab" id="tab-chat"      aria-controls="panel-chat" aria-selected="false">Chat</button>
   </nav>
 
   <section class="panel" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
@@ -333,6 +365,16 @@ button:focus-visible, select:focus-visible, .tab:focus-visible {
       <div class="cal" id="cal-grid"></div>
       <div class="agenda" id="agenda"></div>
     </div>
+  </section>
+
+  <section class="panel" id="panel-chat" role="tabpanel" aria-labelledby="tab-chat" hidden>
+    <div class="chat-log" id="chat-log" role="log" aria-live="polite" aria-label="Conversation"></div>
+    <form class="chat-form" id="chat-form">
+      <label class="sr-only" for="chat-input">Message</label>
+      <textarea id="chat-input" rows="2" placeholder="Ask about your shifts, or say pause…"></textarea>
+      <button id="chat-send" type="submit">Send</button>
+    </form>
+    <p class="muted" id="chat-note"></p>
   </section>
 
   <p class="footer" id="footer"></p>
@@ -569,6 +611,121 @@ button:focus-visible, select:focus-visible, .tab:focus-visible {
       navigator.clipboard.writeText(md).then(function () { done(true); }, function () { done(false); });
     } else { done(false); }
   });
+
+  /* ---- chat ----
+     One conversation shared with the Telegram bot. History lives server-side,
+     so `lastId` here is only a polling cursor — losing it re-reads the thread
+     rather than losing it. */
+  var CHAT_URL = DATA.chat_url || "";
+  var chatLog = $("chat-log"), chatForm = $("chat-form"),
+      chatInput = $("chat-input"), chatSend = $("chat-send"), chatNote = $("chat-note");
+  var lastId = 0, chatTimer = null, chatBusy = false;
+
+  function chatKey(name) { return "shift-agent-chat-" + name; }
+  try {
+    var storedId = parseInt(localStorage.getItem(chatKey("last-id")), 10);
+    if (storedId > 0) lastId = storedId;
+  } catch (e) {}
+
+  function roleClass(msg) {
+    if (msg.role === "user") return "chat-msg is-user";
+    return msg.source === "system" ? "chat-msg is-system" : "chat-msg is-agent";
+  }
+  function appendMessages(messages) {
+    if (!messages.length) return;
+    var atBottom = chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 40;
+    chatLog.insertAdjacentHTML("beforeend", messages.map(function (msg) {
+      /* esc() on every field: this text is written by a language model and
+         relayed from Telegram, so it is the least trusted data on the page. */
+      var via = msg.source === "telegram" ? " · via Telegram" : "";
+      return '<div class="' + roleClass(msg) + '">' + esc(msg.text) +
+             '<span class="chat-meta">' + esc(fmt(msg.created_at, timeFmt)) + esc(via) +
+             "</span></div>";
+    }).join(""));
+    lastId = messages[messages.length - 1].id;
+    try { localStorage.setItem(chatKey("last-id"), String(lastId)); } catch (e) {}
+    if (atBottom) chatLog.scrollTop = chatLog.scrollHeight;
+  }
+
+  function pollChat(fromStart) {
+    if (!CHAT_URL) return Promise.resolve();
+    var after = fromStart ? 0 : lastId;
+    return fetch(CHAT_URL + "?after=" + encodeURIComponent(after), { cache: "no-store" })
+      .then(function (r) { return r.ok ? r.json() : { messages: [] }; })
+      .then(function (data) {
+        if (fromStart) { chatLog.innerHTML = ""; lastId = 0; }
+        appendMessages(data.messages || []);
+        if (!chatLog.children.length) {
+          chatLog.innerHTML = '<div class="empty">Nothing said yet. ' +
+            "Ask what the agent has seen, or tell it to pause.</div>";
+        }
+      })
+      .catch(function () { /* transient; the next tick retries */ });
+  }
+
+  function setChatEnabled(on) {
+    chatInput.disabled = !on;
+    chatSend.disabled = !on;
+  }
+
+  if (!CHAT_URL) {
+    chatLog.innerHTML = '<div class="empty">Chat needs the agent running.<br>' +
+      "Start it with <span class=\"mono\">shift-agent run --config … --dashboard</span>" +
+      " and open the link it prints.</div>";
+    setChatEnabled(false);
+    chatNote.textContent = "This page was built without a live agent, so there is nothing to talk to.";
+  } else {
+    chatNote.textContent = "Shared with your Telegram chat — replies show up in both.";
+    chatForm.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var text = chatInput.value.trim();
+      if (!text || chatBusy) return;
+      chatBusy = true;
+      setChatEnabled(false);
+      chatSend.textContent = "Sending…";
+      fetch(CHAT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text })
+      }).then(function () {
+        chatInput.value = "";
+      }).catch(function () {
+        chatNote.textContent = "Could not reach the agent. Is it still running?";
+      }).then(function () {
+        chatBusy = false;
+        setChatEnabled(true);
+        chatSend.textContent = "Send";
+        chatInput.focus();
+        return pollChat(false);
+      });
+    });
+
+    /* Enter sends, Shift+Enter breaks the line — the convention every chat
+       surface she already uses follows. */
+    chatInput.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        chatForm.dispatchEvent(new Event("submit", { cancelable: true }));
+      }
+    });
+
+    /* Polls only while the tab is showing. A dashboard left open on a shelf
+       should not hit the loopback server every two seconds forever. */
+    var chatLoaded = false;
+    function syncChatPolling() {
+      var visible = !$("panel-chat").hidden && !document.hidden;
+      if (visible && chatTimer === null) {
+        if (!chatLoaded) { chatLoaded = true; pollChat(true); }
+        chatTimer = setInterval(function () { pollChat(false); }, 2000);
+      } else if (!visible && chatTimer !== null) {
+        clearInterval(chatTimer);
+        chatTimer = null;
+      }
+    }
+    tabs.forEach(function (t) { t.addEventListener("click", syncChatPolling); });
+    document.addEventListener("visibilitychange", syncChatPolling);
+    syncChatPolling();
+  }
 
   $("footer").textContent =
     "Generated " + fmt(DATA.generated_at, { dateStyle: "medium", timeStyle: "short" }) +

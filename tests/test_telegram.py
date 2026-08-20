@@ -277,3 +277,112 @@ async def test_claim_outcome_reports_lost_race(tmp_path):
     )
     text = api.last_text()
     assert "Lost Race" in text and "DRY RUN" not in text
+
+
+# --- link-code robustness ----------------------------------------------------
+
+async def test_non_ascii_link_attempt_gets_a_reply(tmp_path):
+    """A smart quote or emoji must produce "Invalid link code", not silence.
+
+    compare_digest's str form raises TypeError on non-ASCII, which `consume`
+    would swallow - leaving someone whose keyboard autocorrected the code with
+    no feedback at all and no way to tell why linking failed.
+    """
+    notifier, api, store = build(tmp_path, link_code="secret42", chat_id=None)
+
+    await notifier.consume(message("/start secret\u201942", chat=STRANGER))
+
+    assert "Invalid link code" in api.last_text()
+    assert store.get(TELEGRAM_CHAT_KEY) is None
+
+
+async def test_used_link_code_is_expired_from_the_keychain(tmp_path, monkeypatch):
+    """Clearing it in memory alone is not single-use: main._build_notifier reads
+    the code back from the keychain on every start."""
+    deleted: list[tuple[str, str]] = []
+    import shift_agent.secrets as keychain
+
+    monkeypatch.setattr(keychain, "delete", lambda user, name: deleted.append((user, name)))
+
+    api = FakeBotAPI()
+    http = httpx.AsyncClient(transport=api.transport())
+    store = Store(tmp_path / "state.db")
+    notifier = TelegramNotifier(
+        "token123", store, http=http, link_code="secret42", chat_id=None, user="tester"
+    )
+
+    await notifier.consume(message("/start secret42", chat=CHAT))
+
+    assert store.get(TELEGRAM_CHAT_KEY) == CHAT
+    assert deleted == [("tester", "telegram_link_code")]
+
+
+async def test_a_failed_link_does_not_expire_the_code(tmp_path, monkeypatch):
+    deleted: list[tuple[str, str]] = []
+    import shift_agent.secrets as keychain
+
+    monkeypatch.setattr(keychain, "delete", lambda user, name: deleted.append((user, name)))
+
+    api = FakeBotAPI()
+    http = httpx.AsyncClient(transport=api.transport())
+    store = Store(tmp_path / "state.db")
+    notifier = TelegramNotifier(
+        "token123", store, http=http, link_code="secret42", chat_id=None, user="tester"
+    )
+
+    await notifier.consume(message("/start wrong", chat=CHAT))
+
+    assert deleted == []
+
+
+# --- chat routing ------------------------------------------------------------
+
+class RecordingHub:
+    def __init__(self, reply="here you go"):
+        self.reply = reply
+        self.posted: list[tuple[str, str]] = []
+
+    async def post(self, text, *, source):
+        self.posted.append((text, source))
+        return self.reply
+
+
+async def test_plain_text_reaches_the_chat_hub(tmp_path):
+    notifier, api, _ = build(tmp_path)
+    notifier.hub = RecordingHub()
+
+    await notifier.consume(message("what did you see today?"))
+
+    assert notifier.hub.posted == [("what did you see today?", "telegram")]
+    assert api.last_text() == "here you go"
+
+
+async def test_slash_commands_never_reach_the_hub(tmp_path):
+    """/pause has to stay instant; putting a model in that path would make the
+    one command that stops claiming the slowest one."""
+    notifier, api, store = build(tmp_path)
+    notifier.hub = RecordingHub()
+
+    await notifier.consume(message("/pause"))
+
+    assert notifier.hub.posted == []
+    assert store.get(PAUSED_KEY) is True
+
+
+async def test_plain_text_without_a_hub_explains_itself(tmp_path):
+    notifier, api, _ = build(tmp_path)
+
+    await notifier.consume(message("hello?"))
+
+    assert "can't chat yet" in api.last_text()
+
+
+async def test_chat_from_a_stranger_is_ignored(tmp_path):
+    """The authorization gate has to sit in front of the hub too, or an
+    unlinked chat could drive the agent by conversation."""
+    notifier, api, _ = build(tmp_path)
+    notifier.hub = RecordingHub()
+
+    await notifier.consume(message("pause everything", chat=STRANGER))
+
+    assert notifier.hub.posted == []
