@@ -80,6 +80,17 @@ Check it works — this needs no config, credentials, or network:
 python -m shift_agent.main demo
 ```
 
+The friction toolkit (a vision-model action loop for handling captchas/OTP on
+*other* portals — never this one's login) ships built in too:
+
+```bash
+shift-agent friction-set-vision-key --user me
+shift-agent friction-bench --user me
+```
+
+See [docs/FRICTION_TOOLKIT.md](FRICTION_TOOLKIT.md) — skip it entirely if
+you're only here to run the shift agent against FLICA.
+
 Then create your config and open the dashboard:
 
 ```bash
@@ -115,6 +126,32 @@ forwarded to your phone. On your own PC you just click it.
 Datacenter IP addresses also score far worse with reCAPTCHA and look more
 suspicious to portals that watch for automation. **If your portal shows
 captchas, run it on a home computer instead.**
+
+### The friction toolkit works fine here, even though FLICA's captcha doesn't
+
+The warning above is about FLICA specifically: its captcha needs a human to
+click it, and a human can't reach a VPS's browser window. That does not apply
+to the friction toolkit (`shift-agent friction-bench`,
+`friction-set-vision-key`, `friction-set-imap-password`) — it never needs a
+human to look at the screen, because a vision model does that instead of you.
+It runs headless by default for exactly this reason, so it needs no display,
+no Xvfb, and no VNC setup on Ubuntu.
+
+Set the vision API key once, over the same SSH session you're already in:
+
+```bash
+shift-agent friction-set-vision-key --user shiftagent
+```
+
+It's an on-demand command, not part of the always-on service — no systemd
+changes needed. Run it manually whenever you want to use or re-benchmark it:
+
+```bash
+shift-agent friction-bench --user shiftagent
+```
+
+See [docs/FRICTION_TOOLKIT.md](FRICTION_TOOLKIT.md) for what it's for and
+what it doesn't cover.
 
 ### Requirements
 

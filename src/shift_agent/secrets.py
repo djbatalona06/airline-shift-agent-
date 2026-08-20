@@ -1,13 +1,25 @@
 """Secret storage — OS keychain, never a file.
 
-On Windows this resolves to Credential Manager, so the aunt's portal password
-and live session cookies never touch disk in a form the agent itself can read
-back without the logged-in user's context. That matters more here than usual:
+On Windows this resolves to Credential Manager, so anything stored here is
+encrypted against the logged-in Windows account and cannot be read back by
+another user or by copying the file out. That matters more here than usual:
 these are employer credentials on a personal machine, and the whole free tier
 depends on them staying on her box and out of any file DJ might ever copy.
 
-Session cookies are treated as secrets too, not operational state — a live
-cookie is a bearer token for her crew account.
+**What this module does NOT cover — the portal session.** The FLICA adapter
+signs in through a Playwright *persistent* browser profile
+(`paths.profile_dir(user)/browser`), so the live session lives on disk as an
+ordinary Chromium profile, not in here. Two things protect it, neither of them
+this module:
+
+* `%LOCALAPPDATA%` is ACL-protected from other accounts on the machine.
+* Chromium encrypts its own cookie store with DPAPI, keyed to the Windows login.
+
+That is meaningfully weaker than the keychain — a running process under her
+account can read that profile — and it is the deliberate tradeoff for a session
+that survives restarts, so she clears a captcha once rather than every launch.
+Anything that copies a profile directory off the machine is copying a live
+bearer token for her crew account.
 """
 
 from __future__ import annotations
@@ -67,8 +79,15 @@ def get_json(user: str, name: str, default: Any = None) -> Any:
 
 
 def load_portal_secrets(user: str) -> dict[str, Any]:
+    """Credentials handed to a `PortalAdapter` at construction.
+
+    Only `telegram_token` is populated today. `portal_password`/`portal_cookies`
+    were dropped rather than left as an unwired credential path: nothing wrote
+    them, no CLI command set them, and FLICA authenticates through its
+    persistent browser profile instead (see the module docstring). An adapter
+    that does need a stored password should add its own key here together with
+    the command that writes it.
+    """
     return {
-        "password": get(user, "portal_password"),
-        "cookies": get_json(user, "portal_cookies", default=[]),
         "telegram_token": get(user, "telegram_token"),
     }

@@ -51,6 +51,8 @@ class TelegramNotifier(Notifier):
         chat_id: int | None = None,
         tz: tzinfo | None = None,
         poll_timeout: int = 25,
+        user: str | None = None,
+        hub: Any = None,
     ) -> None:
         self.token = token
         self.store = store
@@ -58,11 +60,36 @@ class TelegramNotifier(Notifier):
         self.link_code = link_code
         self.tz = tz
         self.poll_timeout = poll_timeout
+        # Profile name, needed only to expire the link code from the keychain
+        # once it has been used. Optional so tests can build a notifier without
+        # touching the OS keychain at all.
+        self.user = user
+        # Set by main._run when the chat surface is enabled. None means plain
+        # text gets the help blurb, exactly as before.
+        self.hub = hub
         self._pending: dict[str, tuple[asyncio.Future[bool], str]] = {}
         self._listener: asyncio.Task[None] | None = None
 
         if chat_id is not None and self.linked_chat_id is None:
             self.store.set(TELEGRAM_CHAT_KEY, chat_id)
+
+    def _forget_link_code(self) -> None:
+        """Expire the used link code from the keychain.
+
+        Clearing `self.link_code` alone only makes it single-use *in this
+        process*: `main._build_notifier` reads it back from the keychain on
+        every start, so without this a restart revives a code that has already
+        been spent.
+        """
+        if not self.user:
+            return
+        try:
+            from .. import secrets as _keychain
+
+            _keychain.delete(self.user, "telegram_link_code")
+        except Exception as exc:
+            # An unavailable keychain must not undo a successful link.
+            log.warning("could not expire the used link code: %s", exc)
 
     # --- plumbing ------------------------------------------------------------
 
@@ -180,7 +207,24 @@ class TelegramNotifier(Notifier):
             log.warning("ignoring command from unlinked chat %s", chat_id)
             return
 
+        # Slash commands keep their direct path with no model in the loop, so
+        # /pause stays instant when it matters. Anything else is conversation.
+        if not text.startswith("/"):
+            await self._handle_chat(text)
+            return
+
         await self._run_command(command, rest)
+
+    async def _handle_chat(self, text: str) -> None:
+        if self.hub is None:
+            await self._send(
+                "I can't chat yet - start the agent with --dashboard to enable it.\n"
+                "Commands I do understand: /status /pause /resume /schedule"
+            )
+            return
+        reply = await self.hub.post(text, source="telegram")
+        if reply:
+            await self._send(reply)
 
     async def _try_link(self, chat_id: int | None, supplied: str) -> None:
         """Bind the bot to a chat, gated on a one-time code.
@@ -194,9 +238,14 @@ class TelegramNotifier(Notifier):
                 text="This agent has no link code configured. Run: shift-agent link",
             )
             return
-        if _secrets.compare_digest(supplied, self.link_code):
+        # Compared as bytes. The str form of compare_digest is ASCII-only and
+        # raises TypeError otherwise, which `consume` would swallow - leaving
+        # someone whose keyboard inserted a smart quote with no reply at all
+        # rather than "Invalid link code".
+        if _secrets.compare_digest(supplied.encode("utf-8"), self.link_code.encode("utf-8")):
             self.store.set(TELEGRAM_CHAT_KEY, chat_id)
-            self.link_code = None  # single use
+            self.link_code = None  # single use, in this process
+            self._forget_link_code()
             await self._call(
                 "sendMessage", chat_id=chat_id,
                 text="Linked. I'll message you when a matching shift opens.\n"

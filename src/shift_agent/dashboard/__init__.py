@@ -75,7 +75,9 @@ def _write_atomic(path: Path, content: str) -> None:
         raise
 
 
-def build_dashboard(store: Store, config: UserConfig, outdir: str | Path) -> Path:
+def build_dashboard(
+    store: Store, config: UserConfig, outdir: str | Path, chat_url: str | None = None
+) -> Path:
     """Write index.html, shifts.ics and shifts.md. Returns the index path."""
     outdir = Path(outdir)
     payload = build_payload(store, config)
@@ -86,6 +88,9 @@ def build_dashboard(store: Store, config: UserConfig, outdir: str | Path) -> Pat
     # Carried in the payload so the copy button works with no network call.
     payload["markdown"] = markdown
     payload["ics_url"] = ICS
+    # Absent for a statically built dashboard - no running agent means no chat
+    # endpoint, and the tab says so rather than offering a dead input box.
+    payload["chat_url"] = chat_url
 
     _write_atomic(outdir / ICS, calendar)
     _write_atomic(outdir / MARKDOWN, markdown)
@@ -94,14 +99,16 @@ def build_dashboard(store: Store, config: UserConfig, outdir: str | Path) -> Pat
     return index
 
 
-def try_build_dashboard(store: Store, config: UserConfig, outdir: str | Path) -> Path | None:
+def try_build_dashboard(
+    store: Store, config: UserConfig, outdir: str | Path, chat_url: str | None = None
+) -> Path | None:
     """Build, swallowing any failure.
 
     Called from the poll loop, where raising would take shift monitoring down
     with it. The exception is logged rather than lost.
     """
     try:
-        return build_dashboard(store, config, outdir)
+        return build_dashboard(store, config, outdir, chat_url)
     except Exception:
         log.exception("dashboard build failed; polling continues")
         return None
