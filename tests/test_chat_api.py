@@ -55,9 +55,13 @@ def served(tmp_path):
         store.close()
 
 
-def post(url: str, payload: dict):
+def post(url: str, payload: dict, headers: dict | None = None):
+    """Sends what the dashboard page sends. A None value removes a header."""
+    sent = {"Content-Type": "application/json", "X-Shift-Agent": "1"}
+    sent.update(headers or {})
+    sent = {k: v for k, v in sent.items() if v is not None}
     request = urllib.request.Request(
-        url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}
+        url, data=json.dumps(payload).encode(), headers=sent
     )
     return urllib.request.urlopen(request, timeout=10)
 
@@ -120,10 +124,58 @@ def test_an_oversized_body_is_refused(served):
 def test_a_malformed_body_is_refused(served):
     server, _ = served
     request = urllib.request.Request(
-        server.chat_url(), data=b"not json", headers={"Content-Type": "application/json"}
+        server.chat_url(),
+        data=b"not json",
+        headers={"Content-Type": "application/json", "X-Shift-Agent": "1"},
     )
     with pytest.raises(urllib.error.HTTPError):
         urllib.request.urlopen(request, timeout=10)
+
+
+# --- cross-origin writes -----------------------------------------------------
+#
+# The token alone protects a route from a local process that cannot see the
+# URL. It does not protect a *write* route from a browser that can, which is
+# what these three cover.
+
+
+def test_a_write_without_the_custom_header_is_refused(served):
+    """The header is what forces a CORS preflight. A cross-origin form POST or
+    a no-cors fetch cannot set it, so requiring it is what makes the preflight
+    unavoidable - and the preflight is never answered."""
+    server, store = served
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        post(server.chat_url(), {"text": "hi"}, headers={"X-Shift-Agent": None})
+    assert exc.value.code == 404
+    assert store.messages_after("tester") == []
+
+
+def test_a_write_with_a_rebound_host_is_refused(served):
+    """DNS rebinding: the attacker's hostname resolves to 127.0.0.1, so the
+    connection is genuinely to us, but the browser still sends the name it
+    dialled. Pinning Host to the literal address is what catches it."""
+    server, store = served
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        post(server.chat_url(), {"text": "hi"}, headers={"Host": "attacker.example"})
+    assert exc.value.code == 404
+    assert store.messages_after("tester") == []
+
+
+def test_a_write_from_another_origin_is_refused(served):
+    server, store = served
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        post(server.chat_url(), {"text": "hi"}, headers={"Origin": "https://evil.example"})
+    assert exc.value.code == 404
+    assert store.messages_after("tester") == []
+
+
+def test_a_write_from_our_own_origin_is_allowed(served):
+    """The Origin check must not break the page that legitimately sends one."""
+    server, store = served
+    origin = f"http://127.0.0.1:{server.port}"
+    response = post(server.chat_url(), {"text": "hi"}, headers={"Origin": origin})
+    assert response.status == 200
+    assert [m["text"] for m in store.messages_after("tester")][:1] == ["hi"]
 
 
 def test_security_headers_are_sent(served):

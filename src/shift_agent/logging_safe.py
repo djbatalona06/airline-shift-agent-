@@ -26,6 +26,9 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
      r"\1=[REDACTED]"),
     # Unlabelled but unmistakable.
     (re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"), "[JWT]"),
+    # Vendor API keys. An Anthropic key is neither hex nor a JWT, so without this
+    # a key pasted bare into an error message survives every rule below it.
+    (re.compile(r"\bsk-[A-Za-z0-9_-]{20,}"), "[API-KEY]"),
     (re.compile(r"\b[A-Fa-f0-9]{24,}\b"), "[HEX-TOKEN]"),
     (re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+"), "[EMAIL]"),
 )

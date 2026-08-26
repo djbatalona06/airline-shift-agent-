@@ -122,7 +122,12 @@ def _build_chat_hub(config: UserConfig, store: Store, notifier):
     from .chat.agent import AnthropicChatClient, ChatAgent
     from .chat.hub import ChatHub
 
-    key = secrets.get(config.name, "friction_vision_api_key")
+    try:
+        key = secrets.get(config.name, "friction_vision_api_key")
+    except secrets.SecretsUnavailable as exc:
+        print(f"Chat is off: could not read the secret store ({scrub(exc)}).")
+        return None
+
     if not key:
         print(
             "No API key stored, so chat is off. Enable it with:\n"
@@ -130,7 +135,18 @@ def _build_chat_hub(config: UserConfig, store: Store, notifier):
         )
         return None
 
-    agent = ChatAgent(config, store, AnthropicChatClient(key))
+    try:
+        client = AnthropicChatClient(key)
+    except Exception as exc:
+        # `AnthropicChatClient.__init__` imports `anthropic` and constructs a
+        # real client, so it can fail on a broken install or an SDK version
+        # bump. Non-fatal by design: monitoring is the product and chat is the
+        # convenience, which is the promise docs/SECURITY.md's failure-mode
+        # table makes. Without this the agent stops polling over a chat panel.
+        print(f"Chat is off: could not start the model client ({scrub(exc)}).")
+        return None
+
+    agent = ChatAgent(config, store, client)
     hub = ChatHub(config, store, agent, notifier=notifier)
     if isinstance(notifier, TelegramNotifier):
         notifier.hub = hub

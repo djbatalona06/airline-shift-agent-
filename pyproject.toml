@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23", "pytest-playwright>=0.5"]
 
 [project.scripts]
 shift-agent = "shift_agent.main:main"
@@ -31,3 +31,9 @@ where = ["src"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 asyncio_mode = "auto"
+# The default run stays browser-free and offline. If `pytest -q` ever needs
+# Chromium, something has started reaching out that shouldn't.
+addopts = "-m 'not e2e'"
+markers = [
+    "e2e: drives a real browser against a local fake portal. Run with -m e2e.",
+]

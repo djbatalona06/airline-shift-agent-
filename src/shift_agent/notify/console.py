@@ -34,6 +34,9 @@ class ConsoleNotifier(Notifier):
     async def needs_human(self, reason: str, url: str | None = None) -> None:
         self._emit("needs-human", f"{reason}{f' -> {url}' if url else ''}")
 
+    async def system(self, text: str) -> None:
+        self._emit("system", text)
+
     async def offer(self, shift: Shift, timeout_minutes: int) -> bool:
         self._emit("offer", describe(shift, self.tz))
         return self.auto_confirm
