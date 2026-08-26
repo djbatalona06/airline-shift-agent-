@@ -29,6 +29,7 @@ from .store import (
     CHALLENGE_PAUSE_KEY,
     LAST_CYCLE_KEY,
     LAST_DIGEST_KEY,
+    LOGIN_FAILURES_KEY,
     PAUSE_REASON_KEY,
     PAUSED_KEY,
     Store,
@@ -83,6 +84,7 @@ class Poller:
         sleep: Callable[[float], Awaitable[None]] | None = None,
         dashboard_dir: "Path | None" = None,
         chat_backed: bool = False,
+        chat_url: str | None = None,
     ) -> None:
         self.config = config
         self.adapter = adapter
@@ -93,12 +95,12 @@ class Poller:
         # cycle. The page cannot work this out for itself, and offering a chat
         # box with nothing behind it is worse than not offering one.
         self.chat_backed = chat_backed
+        self.chat_url = chat_url
         self.engine = engine or ScheduleEngine(config.availability, config.rules)
         # Injectable so tests can exercise multi-cycle backoff without actually
         # waiting out the exponential delay.
         self.sleep = sleep or asyncio.sleep
         self.consecutive_failures = 0
-        self.login_failures = 0
         self._tz = config.availability.tz
         # Monotonic so the self-resume schedule survives a wall-clock change,
         # and injectable for the same reason `sleep` is.
@@ -113,6 +115,23 @@ class Poller:
         return bool(self.store.get(PAUSED_KEY, False))
 
     def pause(self, reason: str = "", *, recoverable: bool = False) -> None:
+    @property
+    def login_failures(self) -> int:
+        """Consecutive failed logins, persisted rather than held in memory.
+
+        The breaker this feeds exists to stop before the portal locks her
+        account. An in-memory counter resets on every restart, so a supervisor
+        or a Windows Update reboot loop would let the agent keep hammering a
+        password that has changed - defeating the one guard that protects
+        something she would have to phone crew support to undo.
+        """
+        return int(self.store.get(LOGIN_FAILURES_KEY, 0) or 0)
+
+    @login_failures.setter
+    def login_failures(self, value: int) -> None:
+        self.store.set(LOGIN_FAILURES_KEY, int(value))
+
+    def pause(self, reason: str = "") -> None:
         self.store.set(PAUSED_KEY, True)
         self.store.set(PAUSE_REASON_KEY, reason)
         # A challenge is the one pause the agent can get itself out of: someone
@@ -186,13 +205,13 @@ class Poller:
             if auth.state is AuthState.NEEDS_HUMAN:
                 self.pause(auth.detail or "challenge", recoverable=True)
                 await self.notifier.needs_human(
-                    auth.detail or "The portal is asking for verification.",
-                    auth.challenge_url,
+                    scrub(auth.detail) if auth.detail else "The portal is asking for verification.",
+                    scrub(auth.challenge_url) if auth.challenge_url else None,
                 )
                 report.skipped = "needs_human"
                 return report
             if not auth.ok:
-                self.login_failures += 1
+                self.login_failures = self.login_failures + 1
                 limit = self.config.rules.max_login_failures
                 if self.login_failures >= limit:
                     # Circuit breaker. If her password changed, retrying forever
@@ -205,7 +224,11 @@ class Poller:
                     )
                     report.skipped = "login_locked_out"
                     return report
-                raise RuntimeError(f"login failed: {auth.detail}")
+                # Scrubbed at the raise, not just at the log: `_loop` forwards
+                # this exception's text to `notifier.alert`, which on Telegram
+                # leaves the machine. Portal error text routinely carries a
+                # session token.
+                raise RuntimeError(f"login failed: {scrub(auth.detail)}")
             self.login_failures = 0
 
         # Before evaluating anything new, find out what actually happened to the

@@ -1,9 +1,27 @@
-"""The tool loop, the system prompt, and the boundary around portal text.
+"""The model turn behind the chat surface.
 
-The prompt is written for someone who is tired and wants an answer, not a
-briefing: the agent's whole value here is turning "OUTSIDE_AVAILABILITY /
-starts 23:40" into "that one starts at 23:40 and your Friday window closes at
-22:00".
+Mirrors `friction/vision_client.py` exactly: `ChatClient` is a `Protocol`, and
+`AnthropicChatClient` imports `anthropic` inside `__init__` rather than at
+module top. That keeps `import shift_agent.chat` free of any import-time
+network or API-client construction, so the whole suite runs against a fake
+client with no key and no network - matching ci.yml's rule for this repo.
+
+## The claiming boundary (non-negotiable)
+
+The tools below read state and toggle pause. **None of them claims a shift**,
+and none may be added that does.
+
+Claiming stays behind `Notifier.offer` and its explicit Confirm button. That
+interface's contract is that a timeout returns False because "silence is never
+consent" - and a model inferring consent from "yeah go for it, if it looks
+good" is a weaker signal than the silence that interface already refuses. The
+worst outcome available here is being rostered onto a trip she did not agree
+to, out of a base she does not live in, and no conversational convenience is
+worth putting a language model in that path.
+
+`tests/test_chat_boundary.py` fails the build if `TOOLS` ever grows a claim
+verb. Changing that is a new, explicit, written decision - the same rule
+`friction/` operates under.
 """
 
 from __future__ import annotations

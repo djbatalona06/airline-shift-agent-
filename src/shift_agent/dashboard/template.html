@@ -231,6 +231,37 @@ button:focus-visible, select:focus-visible, .tab:focus-visible {
 .empty { color: var(--ink-3); padding: var(--sp-6); text-align: center;
          border: 1px dashed var(--line); border-radius: var(--radius-lg); }
 
+/* --- Chat ----------------------------------------------------------------
+   Fixed-height scroller rather than a growing page: the log has to stay put
+   while the composer keeps its position, or every reply shifts the input out
+   from under the cursor.
+   ------------------------------------------------------------------------- */
+.chat-log { height: min(58vh, 34rem); overflow-y: auto; display: flex;
+            flex-direction: column; gap: var(--sp-3); padding: var(--sp-4);
+            border: 1px solid var(--line); border-radius: var(--radius-lg);
+            background: var(--surface-2); }
+.chat-msg { max-width: min(46ch, 88%); padding: var(--sp-3) var(--sp-4);
+            border-radius: var(--radius-lg); line-height: var(--lh-body);
+            white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-msg.is-user  { align-self: flex-end; background: var(--accent);
+                     color: var(--accent-ink); }
+.chat-msg.is-agent { align-self: flex-start; background: var(--surface);
+                     border: 1px solid var(--line); }
+.chat-msg.is-system { align-self: center; background: transparent;
+                      color: var(--ink-3); font-size: var(--fs-sm);
+                      text-align: center; }
+.chat-meta { display: block; margin-top: var(--sp-1); font-size: var(--fs-xs);
+             opacity: .7; }
+.chat-form { display: flex; gap: var(--sp-2); align-items: flex-end;
+             margin-top: var(--sp-4); }
+.chat-form textarea { flex: 1; font: inherit; color: var(--ink);
+                      background: var(--surface); border: 1px solid var(--line);
+                      border-radius: var(--radius-md); padding: var(--sp-3);
+                      resize: vertical; min-height: 3rem; }
+.chat-form textarea:disabled { opacity: .6; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden;
+           clip: rect(0 0 0 0); white-space: nowrap; }
+
 .footer { margin-top: var(--sp-6); color: var(--ink-3); font-size: var(--fs-xs); }
 
 /* --- Chat ----------------------------------------------------------------
@@ -391,6 +422,7 @@ button:focus-visible, select:focus-visible, .tab:focus-visible {
     <button class="tab" role="tab" id="tab-overview"  aria-controls="panel-overview" aria-selected="true">Overview</button>
     <button class="tab" role="tab" id="tab-settings"  aria-controls="panel-settings" aria-selected="false">Settings</button>
     <button class="tab" role="tab" id="tab-calendar"  aria-controls="panel-calendar" aria-selected="false">Calendar</button>
+    <button class="tab" role="tab" id="tab-chat"      aria-controls="panel-chat" aria-selected="false">Chat</button>
   </nav>
 
   <section class="panel" id="panel-overview" role="tabpanel" aria-labelledby="tab-overview">
@@ -424,6 +456,16 @@ button:focus-visible, select:focus-visible, .tab:focus-visible {
       <div class="cal" id="cal-grid"></div>
       <div class="agenda" id="agenda"></div>
     </div>
+  </section>
+
+  <section class="panel" id="panel-chat" role="tabpanel" aria-labelledby="tab-chat" hidden>
+    <div class="chat-log" id="chat-log" role="log" aria-live="polite" aria-label="Conversation"></div>
+    <form class="chat-form" id="chat-form">
+      <label class="sr-only" for="chat-input">Message</label>
+      <textarea id="chat-input" rows="2" placeholder="Ask about your shifts, or say pause…"></textarea>
+      <button id="chat-send" type="submit">Send</button>
+    </form>
+    <p class="muted" id="chat-note"></p>
   </section>
 
   <p class="footer" id="footer"></p>

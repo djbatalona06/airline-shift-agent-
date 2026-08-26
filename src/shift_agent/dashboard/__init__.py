@@ -88,6 +88,9 @@ def build_dashboard(
     # Carried in the payload so the copy button works with no network call.
     payload["markdown"] = markdown
     payload["ics_url"] = ICS
+    # Absent for a statically built dashboard - no running agent means no chat
+    # endpoint, and the tab says so rather than offering a dead input box.
+    payload["chat_url"] = chat_url
 
     _write_atomic(outdir / ICS, calendar)
     _write_atomic(outdir / MARKDOWN, markdown)

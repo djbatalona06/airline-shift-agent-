@@ -112,6 +112,32 @@ def _build_notifier(config: UserConfig, store: Store, http: httpx.AsyncClient, c
     return notifier
 
 
+def _build_chat_hub(config: UserConfig, store: Store, notifier):
+    """Wire the chat surface, or explain why it stayed off.
+
+    Needs the same vision/chat API key the friction toolkit uses - one key for
+    everything that talks to a model, rather than a second thing to set up.
+    Returns None when it is not configured, and the dashboard tab then renders
+    an explanation instead of a dead input box.
+    """
+    from .chat.agent import AnthropicChatClient, ChatAgent
+    from .chat.hub import ChatHub
+
+    key = secrets.get(config.name, "friction_vision_api_key")
+    if not key:
+        print(
+            "No API key stored, so chat is off. Enable it with:\n"
+            f"  shift-agent friction-set-vision-key --user {config.name}"
+        )
+        return None
+
+    agent = ChatAgent(config, store, AnthropicChatClient(key))
+    hub = ChatHub(config, store, agent, notifier=notifier)
+    if isinstance(notifier, TelegramNotifier):
+        notifier.hub = hub
+    return hub
+
+
 async def _run(args: argparse.Namespace) -> int:
     config = UserConfig.load(args.config)
     if args.dry_run:
@@ -155,6 +181,29 @@ async def _run(args: argparse.Namespace) -> int:
         notifier = _build_notifier(config, store, http, chat=chat)
         if isinstance(notifier, TelegramNotifier):
             notifier.start()
+
+        dashboard_dir = paths.dashboard_dir(config.name)
+        server = None
+        chat_url = None
+        if args.dashboard:
+            from .dashboard.server import DashboardServer
+
+            hub = _build_chat_hub(config, store, notifier)
+            # The server's handler threads hop coroutines back onto this loop -
+            # store and Telegram client both belong to it.
+            server = DashboardServer(
+                dashboard_dir, hub=hub, loop=asyncio.get_running_loop()
+            )
+            server.start()
+            chat_url = server.chat_url() if hub else None
+            # Built before the first poll cycle finishes. The URL is printed
+            # right here and she will open it immediately; without this she gets
+            # whatever the last run left behind, or a chat panel claiming the
+            # agent is not running while it is.
+            from .dashboard import try_build_dashboard
+
+            try_build_dashboard(store, config, dashboard_dir, chat_url)
+            print(f"Dashboard: {server.url}")
 
         adapter = get_adapter(config.portal.adapter)(config, http, creds)
         poller = Poller(
@@ -350,6 +399,54 @@ async def _link(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _friction_bench(args: argparse.Namespace) -> int:
+    """Benchmark the vision-model action loop against a public reCAPTCHA demo.
+
+    Never touches a real portal adapter or FLICA's login - see
+    docs/FRICTION_TOOLKIT.md for the boundary this respects.
+    """
+    from .friction.bench_recaptcha import run_benchmark
+
+    try:
+        result = await run_benchmark(args.user, headless=not args.headed, timeout_s=args.timeout_s)
+    except Exception as exc:
+        # Same contract as `_run`: a shipped app never shows a traceback, and
+        # the text is scrubbed because a failing browser or API call carries
+        # URLs and keys in its message.
+        print(f"\nBenchmark stopped: {scrub(exc)}", file=sys.stderr)
+        print("Run with -v for the full technical detail.", file=sys.stderr)
+        logging.getLogger(__name__).debug("friction-bench failed", exc_info=True)
+        return 1
+
+    status = "PASS" if result.success else "FAIL"
+    print(f"{status} in {result.elapsed_s:.1f}s ({result.steps} steps){': ' + result.detail if result.detail else ''}")
+    return 0 if result.success else 1
+
+
+async def _friction_otp(args: argparse.Namespace) -> int:
+    from .friction.cli import fetch_otp
+
+    try:
+        return await fetch_otp(args.user, timeout_s=args.timeout_s)
+    except Exception as exc:
+        print(f"\nCould not read the mailbox: {scrub(exc)}", file=sys.stderr)
+        print("Run with -v for the full technical detail.", file=sys.stderr)
+        logging.getLogger(__name__).debug("friction-otp failed", exc_info=True)
+        return 1
+
+
+async def _friction_set_vision_key(args: argparse.Namespace) -> int:
+    from .friction.cli import set_vision_key
+
+    return await set_vision_key(args.user)
+
+
+async def _friction_set_imap_password(args: argparse.Namespace) -> int:
+    from .friction.cli import set_imap_password
+
+    return await set_imap_password(args.user)
+
+
 async def _demo(args: argparse.Namespace) -> int:
     """Run the full pipeline against fabricated data.
 
@@ -414,6 +511,10 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--config", type=Path, required=True)
     run.add_argument("--once", action="store_true", help="single cycle, then exit")
     run.add_argument("--dry-run", action="store_true", help="never send a claim request")
+    run.add_argument(
+        "--dashboard", action="store_true",
+        help="serve the live dashboard on loopback, with the chat panel enabled",
+    )
     run.set_defaults(func=_run)
 
     demo = sub.add_parser("demo", help="run the pipeline on fabricated data")
@@ -444,6 +545,36 @@ def main(argv: list[str] | None = None) -> int:
     llm_key = sub.add_parser("set-llm-key", help="store the chat assistant's API key in the OS keychain")
     llm_key.add_argument("--user", default="default")
     llm_key.set_defaults(func=_set_llm_key)
+    fbench = sub.add_parser(
+        "friction-bench",
+        help="benchmark the vision-model action loop against a public reCAPTCHA demo page",
+    )
+    fbench.add_argument("--user", default="default")
+    fbench.add_argument(
+        "--headed", action="store_true",
+        help="show the browser window (debugging only - no human input is required)",
+    )
+    fbench.add_argument("--timeout-s", type=float, default=300.0)
+    fbench.set_defaults(func=_friction_bench)
+
+    fvkey = sub.add_parser(
+        "friction-set-vision-key", help="store the vision-model API key in the OS keychain"
+    )
+    fvkey.add_argument("--user", default="default")
+    fvkey.set_defaults(func=_friction_set_vision_key)
+
+    fimap = sub.add_parser(
+        "friction-set-imap-password", help="store an IMAP app password in the OS keychain"
+    )
+    fimap.add_argument("--user", default="default")
+    fimap.set_defaults(func=_friction_set_imap_password)
+
+    fotp = sub.add_parser(
+        "friction-otp", help="wait for a one-time code to arrive by email and print it"
+    )
+    fotp.add_argument("--user", default="default")
+    fotp.add_argument("--timeout-s", type=float, default=120.0)
+    fotp.set_defaults(func=_friction_otp)
 
     args = parser.parse_args(argv)
     _configure_logging(args.verbose)

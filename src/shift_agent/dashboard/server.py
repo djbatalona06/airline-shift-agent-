@@ -23,6 +23,7 @@ than a web framework, for three static routes.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import secrets
@@ -82,13 +83,22 @@ class _Handler(BaseHTTPRequestHandler):
         parts = path.split("/", 1)
 
         if not parts or not secrets.compare_digest(parts[0], self._token):
+            return None
+        return parts[1] if len(parts) > 1 else ""
+
+    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        name = self._route()
+        if name is None:
             # Same response for a wrong token and a missing file, so the token
             # cannot be probed by watching which URLs 404 differently.
             self._deny()
             return
 
-        name = parts[1] if len(parts) > 1 and parts[1] else "index.html"
-        target = (self._directory / name).resolve()
+        if name == CHAT_ROUTE:
+            self._chat_history()
+            return
+
+        target = (self._directory / (name or "index.html")).resolve()
         try:
             target.relative_to(self._directory.resolve())
         except ValueError:
@@ -100,11 +110,75 @@ class _Handler(BaseHTTPRequestHandler):
             self._deny()
             return
 
-        body = target.read_bytes()
-        self.send_response(200)
-        self.send_header("Content-Type", CONTENT_TYPES.get(target.suffix, "application/octet-stream"))
+        self._respond(
+            target.read_bytes(),
+            CONTENT_TYPES.get(target.suffix, "application/octet-stream"),
+        )
+
+    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+        if self._route() != CHAT_ROUTE:
+            self._deny()
+            return
+        if self._hub is None:
+            self._deny()
+            return
+
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self._deny()
+            return
+        if length <= 0 or length > MAX_BODY_BYTES:
+            self._deny()
+            return
+
+        try:
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            text = str(payload["text"])
+        except (ValueError, KeyError, TypeError, UnicodeDecodeError):
+            self._deny()
+            return
+
+        reply = self._call_hub(self._hub.post(text, source="dashboard"))
+        self._json({"reply": reply})
+
+    def _chat_history(self) -> None:
+        if self._hub is None:
+            self._deny()
+            return
+        raw = parse_qs(urlparse(self.path).query).get("after", ["0"])[0]
+        try:
+            after = int(raw)
+        except ValueError:
+            after = 0
+        messages = self._call_hub(self._hub.history(after))
+        self._json({"messages": messages if isinstance(messages, list) else []})
+
+    def _call_hub(self, coro):
+        """Run a hub coroutine on the agent's event loop from this worker thread.
+
+        The server runs its handlers on its own threads, but the hub, the store
+        and the Telegram client all belong to the poll loop's thread. Hopping
+        back rather than starting a second loop is what keeps a chat message and
+        a poll cycle from touching SQLite concurrently.
+        """
+        if self._loop is None:
+            coro.close()
+            return ""
+        try:
+            return asyncio.run_coroutine_threadsafe(coro, self._loop).result(timeout=120)
+        except Exception as exc:
+            log.warning("chat request failed: %s", exc)
+            return "Something went wrong handling that. Try again."
+
+    def _respond(self, body: bytes, content_type: str, status: int = 200) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Content-Security-Policy", CSP)
         self.end_headers()
         self.wfile.write(body)
 
@@ -210,10 +284,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(encoded)
 
     def _deny(self) -> None:
-        self.send_response(404)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.end_headers()
-        self.wfile.write(b"not found")
+        self._respond(b"not found", "text/plain; charset=utf-8", status=404)
 
 
 class DashboardServer:
@@ -236,6 +307,9 @@ class DashboardServer:
 
     def ics_url(self) -> str:
         return f"{self.url}shifts.ics"
+
+    def chat_url(self) -> str:
+        return f"{self.url}{CHAT_ROUTE}"
 
     def start(self) -> str:
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)

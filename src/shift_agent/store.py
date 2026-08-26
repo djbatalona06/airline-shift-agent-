@@ -8,12 +8,20 @@ strict means a stray backup or support screenshare of the DB leaks nothing.
 Sync sqlite3 inside an async poller is intentional: writes are sub-millisecond
 local operations and a connection pool would be more machinery than the workload
 justifies.
+
+**Threading.** The dashboard server answers on its own handler threads, so this
+connection is reached from more than the poll loop's thread. sqlite3's default
+`check_same_thread` guard only compares against the *creating* thread, which
+says nothing about concurrency - so it is turned off and replaced with an
+explicit lock around every statement. That is the real guarantee, and it costs
+nothing at this workload.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -56,6 +64,24 @@ CREATE TABLE IF NOT EXISTS kv (
     value       TEXT NOT NULL,
     updated_at  TEXT NOT NULL
 );
+
+-- One conversation per profile, shared by every surface that talks to the
+-- agent (the dashboard panel and the Telegram bot). Server-side history is what
+-- lets a reopened dashboard resume the thread instead of restarting it, with
+-- nothing depending on a browser cookie surviving.
+--
+-- Subject to this module's no-secrets rule like every other table here: the
+-- chat agent's tools return schedule and status data only, never a credential.
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user        TEXT NOT NULL,
+    role        TEXT NOT NULL,      -- user | agent
+    source      TEXT NOT NULL,      -- dashboard | telegram | system
+    text        TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS chat_messages_user_id ON chat_messages (user, id);
 """
 
 
@@ -72,10 +98,64 @@ PENDING_CLAIMS_KEY = "pending_claims"
 # True when the current pause is a portal challenge, which the agent may clear
 # by itself once the challenge is gone. A login-failure pause is not.
 CHALLENGE_PAUSE_KEY = "pause_is_challenge"
+# Persisted rather than held on the Poller: the account-lockout breaker must
+# survive a restart, or a crash loop defeats it. See `Poller.login_failures`.
+LOGIN_FAILURES_KEY = "login_failures"
 
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+class _Result:
+    """Rows already read, plus the bits of a cursor callers actually use.
+
+    Returning a live cursor would leave a hole in the locking: sqlite3 fetches
+    rows lazily, so iteration would happen after the lock was released. Rows are
+    small and bounded here (a profile's shift history), so reading them eagerly
+    costs nothing and makes the guarantee real.
+    """
+
+    __slots__ = ("_rows", "lastrowid")
+
+    def __init__(self, rows: list[sqlite3.Row], lastrowid: int | None) -> None:
+        self._rows = rows
+        self.lastrowid = lastrowid
+
+    def __iter__(self):
+        return iter(self._rows)
+
+    def fetchall(self) -> list[sqlite3.Row]:
+        return self._rows
+
+    def fetchone(self) -> sqlite3.Row | None:
+        return self._rows[0] if self._rows else None
+
+
+class _Connection:
+    """A sqlite3 connection with a lock in front of every statement.
+
+    Wrapping rather than subclassing so `store.db.execute(...)` keeps working
+    for the callers that read rows directly (`dashboard/data.py`) while still
+    being serialised.
+    """
+
+    def __init__(self, raw: sqlite3.Connection, lock: threading.Lock) -> None:
+        self._raw = raw
+        self._lock = lock
+
+    def execute(self, sql: str, parameters=()) -> _Result:
+        with self._lock:
+            cursor = self._raw.execute(sql, parameters)
+            return _Result(cursor.fetchall(), cursor.lastrowid)
+
+    def executescript(self, sql: str) -> None:
+        with self._lock:
+            self._raw.executescript(sql)
+
+    def close(self) -> None:
+        with self._lock:
+            self._raw.close()
 
 
 class Store:
@@ -249,6 +329,43 @@ class Store:
                 (user, since.astimezone(UTC).isoformat()),
             )
         )
+
+    # --- chat ----------------------------------------------------------------
+
+    def append_message(self, user: str, role: str, source: str, text: str) -> int:
+        """Append one turn and return its id.
+
+        The id is what both surfaces poll against, so it is returned rather than
+        discarded - the dashboard uses it as its `after` cursor.
+        """
+        cursor = self.db.execute(
+            """
+            INSERT INTO chat_messages (user, role, source, text, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (user, role, source, text, _now()),
+        )
+        return int(cursor.lastrowid)
+
+    def messages_after(self, user: str, after_id: int = 0, limit: int = 200) -> list[sqlite3.Row]:
+        return list(
+            self.db.execute(
+                "SELECT * FROM chat_messages WHERE user = ? AND id > ? ORDER BY id LIMIT ?",
+                (user, int(after_id), limit),
+            )
+        )
+
+    def recent_messages(self, user: str, limit: int = 40) -> list[sqlite3.Row]:
+        """The last `limit` turns in chronological order.
+
+        Ordered DESC in SQL to take the *newest* rows, then reversed, so a long
+        thread gives the model its most recent context rather than its oldest.
+        """
+        rows = self.db.execute(
+            "SELECT * FROM chat_messages WHERE user = ? ORDER BY id DESC LIMIT ?",
+            (user, limit),
+        ).fetchall()
+        return list(reversed(rows))
 
     # --- key/value -----------------------------------------------------------
 
