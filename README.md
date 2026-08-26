@@ -40,22 +40,34 @@ what is still unproven. The FLICA adapter's parsers are tested against fixtures;
 
 ### What it deliberately does not do
 
-- **It does not solve captchas.** When the portal challenges, it pauses and asks
-  you. Captcha-solving services are how accounts get flagged, and a flagged
-  account on a crew system is a disciplinary matter.
+- **It does not solve captchas on the way to a shift.** When the portal
+  challenges, the claiming path pauses and asks you. It ships with a toolkit
+  that *can* work a challenge (see below), and that toolkit is deliberately not
+  wired into the part of the app that touches your employer — because a flagged
+  account on a crew system is a disciplinary matter, not a retry-tomorrow
+  inconvenience.
 - **It does not model legality.** It enforces plain scheduling hygiene, not
   FAA duty limits or nursing ratios. The portal is authoritative; a
   half-correct legality model would be worse than none.
 - **It never changes your home base.** Picking up from the wrong domicile means
   being rostered out of a city you do not live in.
 
-### Friction toolkit (built in, kept separate from portal auth)
+### Friction toolkit (built in, kept away from portal auth)
 
-A built-in, portal-agnostic helper — a vision-model action loop and IMAP OTP
-reader for handling web-auth friction generically (`shift-agent
-friction-bench` and friends). It ships with the app and needs no separate
-install, but it is never part of the shift-claiming path and is not targeted
-at FLICA specifically. See
+The app ships a portal-agnostic way to work a login challenge: screenshot the
+page, ask a vision model for one action, execute it, repeat — plus an IMAP
+reader that pulls a one-time code out of your mailbox instead of your phone.
+`shift-agent friction-bench` runs the loop against Google's public reCAPTCHA
+demo page and prints PASS/FAIL. That is a real capability, installed by default,
+and this README does not pretend otherwise.
+
+What keeps it separate from your employer is a boundary, not an absence:
+nothing in `friction/` is imported by any `PortalAdapter`, and
+`tests/test_friction_boundary.py` fails the build the moment one mentions it.
+Pointing it at a live crew portal would be a new written decision, and it is the
+kind of decision to make with your eyes open — read
+[docs/CAPTCHA.md](docs/CAPTCHA.md) on what a flagged account actually costs
+before you make it. Full description in
 [docs/FRICTION_TOOLKIT.md](docs/FRICTION_TOOLKIT.md).
 
 ---
@@ -71,9 +83,10 @@ at FLICA specifically. See
 
 **On picking the server option:** it is the only one that survives your computer
 being off, and it costs a real trade. FLICA challenges the sign-in with a
-"confirm you are human" box, this agent refuses to solve those, and a server has
-no screen — so clearing one means opening a remote view rather than clicking
-once. Datacenter addresses also get challenged *more* than home connections. If
+"confirm you are human" box, the claiming path hands those to you rather than
+working them, and a server has no screen — so clearing one means opening a
+remote view rather than clicking once. Datacenter addresses also get challenged
+*more* than home connections. If
 you have a computer that can stay on, that is the easier answer.
 [docs/VPS.md](docs/VPS.md) opens with the full comparison, then walks the whole
 setup for someone who has never used Linux.
@@ -237,11 +250,10 @@ pytest -m e2e          # add xvfb-run -a on a headless Linux box
 They start a fake FLICA on loopback — the real fixtures, plus the login,
 challenge and expired pages the fixtures never had — and drive the **real**
 adapter through Chromium: frames, the persistent profile, challenge detection
-and recovery, and whether a poll cycle actually sees new data. The same tier
-drives the dashboard's chat bubble against the real server and asserts the API
-key reaches neither the DOM nor `localStorage`, and that nothing leaves
-loopback. Building it found seven defects in the browser layer, listed in
-[docs/PARSING.md](docs/PARSING.md).
+and recovery, and whether a poll cycle actually sees new data. Building it found
+eight defects in the browser layer, listed in
+[docs/PARSING.md](docs/PARSING.md) — two of which had silently disabled
+behaviour this README documents.
 
 The server path is verified in a throwaway Ubuntu container rather than by
 reading the script:

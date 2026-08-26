@@ -1,13 +1,26 @@
 # Surviving reCAPTCHA on a 24/7 agent
 
-FLICA shows a "confirm you are human" box, and this agent will never click it
-for you. That is a deliberate refusal, not a missing feature — captcha-solving
-services are how accounts get flagged, and a flagged account on a crew system is
-a disciplinary matter rather than a retry-tomorrow inconvenience.
+FLICA shows a "confirm you are human" box. The shift-claiming path does not
+click it for you: it pauses, sends you a link, and waits.
 
-So the question is not "how do we solve it". It is **how often does it appear,
-and how quickly do we recover when it does**. Everything below is about
-lowering the first number and the second one.
+That is a choice about where to put a capability, not a claim that the
+capability is missing. The app ships `friction/` — a screenshot → vision-model →
+action loop that can work a visual challenge, benchmarked against Google's
+public reCAPTCHA demo by `shift-agent friction-bench`. It is installed by
+default and it is one written decision away from any adapter's `login()`.
+[docs/SECURITY.md](SECURITY.md) has the case for and against making that
+decision; [docs/FRICTION_TOOLKIT.md](FRICTION_TOOLKIT.md) has the mechanics.
+
+The short version of why the default is a hand-off: a crew scheduling account
+flagged for automated challenge-solving is a disciplinary matter, not a
+retry-tomorrow inconvenience. Everything else in this file is reversible with a
+config edit. That is not.
+
+And solving is the expensive answer to the wrong question. A challenge you never
+see costs nothing to clear, and almost all of the levers on how often you see
+one are cheap, boring, and listed below. **How often does it appear, and how
+quickly do we recover when it does** — lower the first number, shrink the
+second, and the third question mostly stops mattering.
 
 ---
 
@@ -103,9 +116,10 @@ are the mismatches most likely to be noticed:
   browser's window size should agree.
 
 What not to do: install a stealth plugin, spoof a different browser, or rotate
-user agents. Fingerprint-evasion tooling is exactly the "arms race" this project
-declines to enter, and an *inconsistent* fingerprint is a stronger bot signal
-than a plain one.
+user agents. This one is not a policy line — it is that evasion tooling usually
+makes things worse. An *inconsistent* fingerprint is a stronger bot signal than
+a plain one, and a stealth plugin that is a version behind the detector is how a
+browser that was passing starts failing.
 
 ### 4. Request rhythm
 
@@ -153,6 +167,49 @@ dry_run: true                # for the first week, at minimum
 
 Plus, in order: run it at home if you possibly can; keep the browser profile
 intact; set up the remote viewer once and check it works.
+
+---
+
+## If you decide to have it solve them
+
+The default is a hand-off, and everything above is about making that hand-off
+rare. But `friction/` exists, it works well enough to clear the public reCAPTCHA
+demo, and someone running this unattended on a box with no screen will
+eventually consider pointing it at the real thing. If that is you, the honest
+guidance is:
+
+**Do the cheap things first, and measure.** Sections 1–4 above are reversible
+and cost nothing. If you have not yet moved off a datacenter address or raised
+`poll.interval_seconds` past 45, you do not yet know how often you are actually
+challenged — and you may be about to automate a problem you could have deleted.
+
+**Know what it does and does not clear.** The loop answers a *visible* challenge:
+an image grid, a checkbox, a page that asks you to do something. reCAPTCHA v3
+and Enterprise mostly score the session silently and never present one, so a
+loop that solves images does not touch them. If your challenges are invisible
+score-based blocks, this changes nothing.
+
+**Pace it, because the toolkit does not.** `run_vision_loop` has `max_steps`,
+`step_timeout_s` and `total_timeout_s` — three ways for one attempt to give up,
+and not one rate limit between them. Many challenges cleared quickly
+is itself the pattern detectors look for. Cap how many the agent may attempt in
+a day, and treat hitting that cap as a reason to pause and tell you rather than
+to keep going.
+
+**Fail towards the human.** Wire it so a loop that fails ends in the same
+`NEEDS_HUMAN` pause the default has today, not a retry. A challenge that could
+not be solved is a signal about the session, and the response to a session going
+bad is not to keep pressing it.
+
+**Write down that you did it.** [docs/SECURITY.md](SECURITY.md) says this is a
+decision that gets recorded there and in the adapter's docstring. That is not
+ceremony: `tests/test_friction_boundary.py` will fail the build until you
+deliberately change it, and the point of the failure is to make sure the change
+is made by someone who read this page.
+
+The line worth keeping is the one about whose account it is. This is a
+defensible decision to make for your own login. It is not one to make silently
+on behalf of a relative who will be the one sitting in the meeting.
 
 ---
 

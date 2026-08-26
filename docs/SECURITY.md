@@ -50,11 +50,10 @@ Outbound connections only, and only to:
 - The portal you configure.
 - `api.telegram.org`, if you set up a bot.
 - Your healthcheck URL, if you set one.
-- **Your chosen model endpoint, if you turn on the chat assistant.** See below.
+- **`api.anthropic.com`, if you turn on the chat panel or use the friction
+  toolkit.** See below.
 
 There is no telemetry, and nothing is sent to the author.
-
-- `api.anthropic.com`, if you enable the chat panel or the friction toolkit.
 
 The dashboard server **binds `127.0.0.1` only** and puts a random token in the
 URL path. It is never exposed on a public interface, including for the chat
@@ -77,69 +76,64 @@ verdicts, your availability rules — are sent to that model's provider.** That 
 not telemetry and it is not incidental; it is what makes the feature work. It is
 still a third party receiving your roster.
 
-Three things follow:
+Two things follow:
 
 - **It is off unless you turn it on.** No key is stored by default, and with no
-  key the bubble shows setup instructions instead of a chat box. Nothing is sent.
-- **A local model keeps the original guarantee intact.** Point
-  `llm.base_url` at Ollama or llama.cpp on `127.0.0.1` and nothing leaves the
-  machine — the assistant works exactly the same way. If the original privacy
-  promise is what you value about this project, this is the configuration to
-  pick, and it needs no API key at all.
+  key the Chat tab explains how to enable it instead of offering an input box.
+  Nothing is sent, and `run` without `--dashboard` has no chat surface at all.
 - **A hosted model is a considered trade, not a default you drift into.** You
-  have to run `shift-agent set-llm-key` to make it happen.
+  have to run `shift-agent friction-set-vision-key` to make it happen — the same
+  key the friction toolkit uses, so there is one place to revoke.
 
-What is *not* sent, in either configuration: your portal password (this software
-never has it), session cookies, the Telegram bot token, or the API key of any
-other service. The assistant reads the same database the dashboard renders, and
-that database holds no secrets by design.
+What is *not* sent: your portal password (this software never has it), session
+cookies, the Telegram bot token, or the API key of any other service. The
+assistant reads the same database the dashboard renders, and that database holds
+no secrets by design.
 
 ### Where the API key lives
 
 In the OS keychain, alongside the Telegram token — never in the config file,
-never in the dashboard page, never in the database. In the default `proxy` mode
-the loopback server holds it and the browser only ever receives rendered text; a
-test asserts the key appears in neither the DOM, nor `localStorage`, nor the
-embedded payload.
-
-`llm.mode: browser` is the exception, and it says so in the panel: it exists for
-opening the saved dashboard file directly with no server behind it, and there
-the key is stored in the browser rather than the keychain. That mode also has no
-tools — it can only discuss what is already on the page.
+never in the dashboard page, never in the database. The loopback server holds it
+and calls the model; the browser only ever receives rendered text.
 
 ### The dashboard server's write path
 
-The chat feature gave a previously read-only server its first `POST` routes.
+The chat feature gave a previously read-only server its first `POST` route.
 Loopback alone is not sufficient protection for a write path — any local process
 can reach the port, and a web page in another tab can be pointed at
 `127.0.0.1` — so a request must satisfy all four of:
 
 1. The random path token, compared in constant time.
-2. A `Host` header of exactly `127.0.0.1:<port>`, which defeats DNS rebinding.
-3. An `Origin`, if present, matching the server's own.
+2. A `Host` header of exactly `127.0.0.1:<port>`, which defeats DNS rebinding:
+   a rebound hostname resolves here but is not what the browser sends.
+3. An `Origin`, if present, matching the server's own. Checked when present
+   rather than required, because a same-origin navigation legitimately omits it.
 4. A custom `X-Shift-Agent` header, which forces a CORS preflight that is never
-   answered.
+   answered. A cross-origin form POST or a `no-cors` fetch cannot set it.
 
 Every failure returns the identical 404 the read path already used, so the token
-stays unguessable. With no chat backend attached the routes do not exist at all.
+stays unguessable and a rejected write reveals nothing about whether the token
+was right. With no hub attached the route does not exist at all.
 
-### What the assistant is allowed to do
+### Prompt injection, and why the tool list is the boundary
 
-It reads. There is no claim tool and no portal tool — it cannot pick up a shift,
-sign in, clear a challenge, or change your home base.
+Shift titles and verdict details are strings the *portal* produced, which means
+anyone who can get text onto your open-time page can get text into the
+assistant's prompt. Treat that as a given rather than something to filter away.
 
-The one write it can reach is editing your config file, and that is deliberately
-split in two: the model can *propose* a change, which validates it and returns a
-diff; only pressing **Apply** writes anything, and the id authorising the write
-comes from the UI rather than from the model. A backup is kept alongside.
+Prompt-level defences help and are not a boundary. The boundary is the tool
+surface, which is short on purpose — read status, settings and shift history,
+pause, resume — and enforced by `tests/test_chat_boundary.py`, which fails the
+build if a claiming verb appears in it. So the worst a successful injection buys
+is a wrong answer or a paused agent, both of which you can see. It cannot claim
+a shift, sign in, clear a challenge, or change your home base. See
+[The chat panel and Telegram assistant](#the-chat-panel-and-telegram-assistant)
+for the reasoning behind keeping claiming out.
 
-This split exists because shift titles and verdict details are strings the portal
-produced, which means anyone who can get text onto your open-time page can get
-text into the assistant's prompt. That text travels inside a delimited block the
-system prompt identifies as data rather than instructions — but prompt-level
-defences are mitigation, not a boundary. The boundary is the narrow tool surface:
-a successful injection can produce a wrong answer or a proposed config change you
-will see as a diff. It cannot claim a shift.
+Pausing is in the list rather than out of it because the failure directions are
+not symmetric: a wrongly paused agent misses shifts and says so on the
+dashboard, while a wrongly *unpausable* one cannot be stopped from the phone
+you happen to be holding.
 
 ## Logging
 
@@ -188,29 +182,53 @@ language model and relayed from a chat app.
 
 ## Captchas and bot detection
 
-The agent does not solve captchas and does not use fingerprint-evasion tooling.
-When challenged it pauses and asks you.
+Two statements, both true, and they are usually collapsed into one:
 
-This is a deliberate refusal, not a missing feature. Those services exist to
-defeat bot detection, and being flagged on an employer's scheduling system is a
-disciplinary matter rather than an inconvenience. Requests are jittered and run
-at human rates for the same reason.
+**The claiming path does not solve captchas.** A `PortalAdapter.login()` that
+meets a challenge returns `NEEDS_HUMAN` with a link and stops. The poller pauses,
+Telegram tells you, and it re-probes on a widening interval in case you clear it
+in the browser without answering the bot. Nothing in that path clicks a
+challenge, and no fingerprint-evasion tooling is used anywhere — an
+*inconsistent* fingerprint is a stronger bot signal than a plain one. Requests
+are jittered and run at human rates.
 
-## The friction toolkit (built in, not used by any adapter)
+**The app also ships something that can work a challenge.** `friction/` is a
+screenshot → vision-model → action loop plus an IMAP one-time-code reader,
+installed by default and benchmarked by `shift-agent friction-bench` against
+Google's public reCAPTCHA demo. Describing this project as "refusing to solve
+captchas" full stop stopped being accurate the day that landed.
 
-[docs/FRICTION_TOOLKIT.md](FRICTION_TOOLKIT.md) documents a screenshot-vision-
-model action loop and an IMAP one-time-code reader, run via `shift-agent
-friction-bench` and `shift-agent friction-set-vision-key`/
-`friction-set-imap-password`. It ships with the app — no separate install
-step — but is not imported by `main.py`'s `run`/`poller` path or by any
-`PortalAdapter`, including FLICA. It exists as a reusable, portal-agnostic
-capability for whatever future adapter needs it, not as something aimed at
-FLICA specifically.
+What separates them is a boundary that is checked, not a gap in the code:
+nothing in `friction/` is imported by `adapters/`, nothing in `friction/`
+imports from `adapters/`, and `tests/test_friction_boundary.py` fails the build
+the moment an adapter module so much as mentions it. See
+[docs/FRICTION_TOOLKIT.md](FRICTION_TOOLKIT.md) for what the toolkit is and
+[docs/CAPTCHA.md](CAPTCHA.md) for the operational case.
 
-The policy above is unchanged: a portal adapter's `login()` still returns
-`NEEDS_HUMAN` and hands off to you on any captcha or MFA challenge. Wiring the
-friction toolkit into a live adapter would require a new, explicit, written
-decision — not a side effect of it being installed by default.
+### If you are considering wiring it in
+
+That is a new, explicit, written decision — recorded here and in the adapter's
+own module docstring, never a side effect of the toolkit being installed. The
+thing to weigh is not whether it works:
+
+- **The account is your employment.** A crew scheduling account flagged for
+  automated challenge-solving is a disciplinary matter, not a
+  retry-tomorrow inconvenience. The downside is not a missed shift, and it is
+  not recoverable by changing a config value.
+- **Clearing a demo page is not defeating a production system.** reCAPTCHA v3
+  and Enterprise score a session's *behaviour* over time and never show an image
+  challenge to solve. Turnstile is the same shape. Passing the bench says the
+  loop mechanics work; it says nothing about an adversarial scorer.
+- **Volume is its own signal.** A system that sees many challenges cleared
+  quickly may flag the account regardless of how each one was cleared. The
+  toolkit adds no pacing of its own.
+- **The cheaper fix usually works.** Most of what drives challenge frequency is
+  where the traffic comes from and how often it arrives — see
+  [docs/CAPTCHA.md](CAPTCHA.md). Moving off a datacenter address and raising
+  `poll.interval_seconds` are reversible; a flagged account is not.
+
+If you do it anyway, do it knowing that: it is a defensible choice to make for
+your own account, and an indefensible one to make silently for someone else's.
 
 ## Portal captures
 
@@ -246,14 +264,16 @@ reviewed as a change to the threat model rather than as a feature.
 **What was found and fixed while building it:**
 
 - An unlabelled `sk-` API key survived log scrubbing entirely.
-- Config edits written with `yaml.safe_dump` destroyed every comment in the
-  file — the comments are the documentation, so this was treated as a defect,
-  not cosmetics.
-- A patch value of `20:00` written unquoted is base-60 in YAML 1.1, and parsed
-  back as **00:20**. Asking to move a window to 8pm would silently have set it
-  to twenty past midnight, and the validation step would not have caught it
-  because it checked a parallel value rather than the file being written.
-  Validation now re-reads exactly what will be written.
+- The chat `POST` route was reachable by any page that knew the URL. Loopback
+  and a path token are enough for a read; a write also needs `Host` pinning
+  against DNS rebinding and a custom header to force an unanswered CORS
+  preflight. Both are now required, and both are covered by a test that fails
+  when either is removed.
+- Building the chat client could take the whole agent down. The failure-mode
+  table below promises that a model problem costs you the chat panel and
+  nothing else; an `anthropic` import that failed instead escaped
+  `_build_chat_hub` and killed `run --dashboard` before the first poll cycle.
+  Found by running the real CLI, not by a test — the same way the last one was.
 - `premium` failed open against a documented promise that it fails closed.
 - A stale challenge flag could let the agent silently undo a `/pause` a human
   had asked for.
@@ -266,14 +286,17 @@ reviewed as a change to the threat model rather than as a feature.
 **Accepted risks, stated rather than mitigated:**
 
 - **Prompt injection from portal text** can reach the assistant. The mitigation
-  is the tool surface, not the prompt: read tools plus a proposal that needs a
-  human click. Worst case is a wrong answer or an unwanted diff you can see.
-- **A hosted model receives your roster.** Unavoidable if you choose one; use a
-  local endpoint if that matters to you.
+  is the tool surface, not the prompt. Worst case is a wrong answer or a paused
+  agent, both visible on the dashboard.
+- **A hosted model receives your roster.** Unavoidable once you enable the chat
+  panel; the only way not to accept it is not to store a key.
 - **The Linux secrets file is still unencrypted**, for the reasons already given
   above. The API key now sits in it alongside the Telegram token on such a box.
-- **`browser` mode stores the key in the browser.** It is opt-in, labelled in
-  the UI, and exists only for a configuration where no server is running.
+- **A captcha-solving loop ships in the box.** `friction/` is installed by
+  default and is one written decision away from an adapter's `login()`. The
+  boundary is a test, not an absence of code — see
+  [Captchas and bot detection](#captchas-and-bot-detection) for what that
+  decision costs if you make it.
 - **The claim path remains unproven.** See [PARSING.md](PARSING.md); keep
   `dry_run: true` until it has been watched once.
 
