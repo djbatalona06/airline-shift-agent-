@@ -94,6 +94,10 @@ LAST_CYCLE_KEY = "last_cycle"
 LAST_DIGEST_KEY = "last_digest_date"
 TELEGRAM_OFFSET_KEY = "telegram_update_offset"
 TELEGRAM_CHAT_KEY = "telegram_linked_chat_id"
+PENDING_CLAIMS_KEY = "pending_claims"
+# True when the current pause is a portal challenge, which the agent may clear
+# by itself once the challenge is gone. A login-failure pause is not.
+CHALLENGE_PAUSE_KEY = "pause_is_challenge"
 # Persisted rather than held on the Poller: the account-lockout breaker must
 # survive a restart, or a crash loop defeats it. See `Poller.login_failures`.
 LOGIN_FAILURES_KEY = "login_failures"
@@ -268,6 +272,49 @@ class Store:
             (user, shift_id),
         ).fetchone()
         return int(row["n"]) if row else 0
+
+    # --- awaiting a decision -------------------------------------------------
+    #
+    # Some portals accept a request and decide later, so a submitted claim is
+    # not yet an outcome. These ids are the ones the poller must go back and
+    # re-read. Kept in kv rather than as a column on `claims` so no schema
+    # migration is needed for a database that may already exist in the field.
+
+    def mark_pending_claim(self, user: str, shift_id: str) -> None:
+        pending = self.get(PENDING_CLAIMS_KEY) or {}
+        ids = pending.get(user) or []
+        if shift_id not in ids:
+            ids.append(shift_id)
+        pending[user] = ids
+        self.set(PENDING_CLAIMS_KEY, pending)
+
+    def pending_claims(self, user: str) -> list[str]:
+        return list((self.get(PENDING_CLAIMS_KEY) or {}).get(user) or [])
+
+    def clear_pending_claim(self, user: str, shift_id: str) -> None:
+        pending = self.get(PENDING_CLAIMS_KEY) or {}
+        ids = [i for i in (pending.get(user) or []) if i != shift_id]
+        pending[user] = ids
+        self.set(PENDING_CLAIMS_KEY, pending)
+
+    def replace_claim_outcome(self, user: str, shift_id: str, result: ClaimResult) -> None:
+        """Overwrite the optimistic row written when the request was submitted.
+
+        Updated rather than appended so `failed_attempts` counts one strike per
+        real attempt. Appending would make a single rejected request look like
+        two, and burn the retry budget twice as fast.
+        """
+        self.db.execute(
+            """
+            UPDATE claims SET outcome = ?, detail = ?
+            WHERE id = (
+                SELECT id FROM claims
+                WHERE user = ? AND shift_id = ? AND dry_run = 0
+                ORDER BY id DESC LIMIT 1
+            )
+            """,
+            (result.outcome.value, result.detail, user, shift_id),
+        )
 
     def claims_since(self, user: str, since: datetime) -> list[sqlite3.Row]:
         return list(

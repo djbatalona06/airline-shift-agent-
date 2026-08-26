@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets as _secrets
+import time
 from datetime import tzinfo
 from typing import Any
 
@@ -20,6 +21,7 @@ import httpx
 
 from ..models import ClaimResult, Shift
 from ..store import (
+    CHALLENGE_PAUSE_KEY,
     PAUSE_REASON_KEY,
     PAUSED_KEY,
     TELEGRAM_CHAT_KEY,
@@ -35,9 +37,30 @@ API_ROOT = "https://api.telegram.org"
 CONFIRM = "c"
 SKIP = "s"
 
+# Telegram allows roughly one message per second to a single chat.
+MIN_SEND_INTERVAL = 1.0
+# Cap on how long we will sit out a 429. Beyond this the message is not worth
+# blocking the poll loop for.
+MAX_RETRY_AFTER = 30.0
+
 
 class TelegramError(RuntimeError):
     pass
+
+
+def _retry_after(response: httpx.Response) -> float:
+    """Seconds to wait, from Telegram's own answer where it gives one."""
+    try:
+        body = response.json()
+        value = float((body.get("parameters") or {}).get("retry_after", 0))
+    except (ValueError, AttributeError, TypeError):
+        value = 0.0
+    if value <= 0:
+        try:
+            value = float(response.headers.get("Retry-After") or 0)
+        except ValueError:
+            value = 0.0
+    return min(max(value, MIN_SEND_INTERVAL), MAX_RETRY_AFTER)
 
 
 class TelegramNotifier(Notifier):
@@ -53,6 +76,9 @@ class TelegramNotifier(Notifier):
         poll_timeout: int = 25,
         user: str | None = None,
         hub: Any = None,
+        min_send_interval: float = MIN_SEND_INTERVAL,
+        clock: Any = None,
+        sleep: Any = None,
     ) -> None:
         self.token = token
         self.store = store
@@ -69,6 +95,13 @@ class TelegramNotifier(Notifier):
         self.hub = hub
         self._pending: dict[str, tuple[asyncio.Future[bool], str]] = {}
         self._listener: asyncio.Task[None] | None = None
+        self._min_send_interval = min_send_interval
+        self._clock = clock or time.monotonic
+        # Injectable so tests can assert the pacing without waiting it out, the
+        # same trick the poller uses for its backoff.
+        self._sleep = sleep or asyncio.sleep
+        self._last_send = -1e9
+        self._send_lock = asyncio.Lock()
 
         if chat_id is not None and self.linked_chat_id is None:
             self.store.set(TELEGRAM_CHAT_KEY, chat_id)
@@ -110,6 +143,21 @@ class TelegramNotifier(Notifier):
             raise TelegramError(f"{method} failed: {payload.get('description')}")
         return payload.get("result")
 
+    async def _throttle(self) -> None:
+        """Hold sends to roughly one a second in a single chat.
+
+        Shift alerts are sparse enough that this never mattered. Conversational
+        replies are not: `/ask` can produce several messages in a burst, and
+        Telegram answers a burst with 429s. Being paced is better than having a
+        captcha alert silently dropped because a chat reply used up the budget.
+        """
+        async with self._send_lock:
+            now = self._clock()
+            wait = self._min_send_interval - (now - self._last_send)
+            if wait > 0:
+                await self._sleep(wait)
+            self._last_send = self._clock()
+
     async def _send(self, text: str, **extra: Any) -> dict[str, Any] | None:
         """Best-effort send. Never raises into the poll loop.
 
@@ -120,11 +168,25 @@ class TelegramNotifier(Notifier):
         if chat is None:
             log.warning("no linked chat; dropping message: %s", text[:80])
             return None
-        try:
-            return await self._call("sendMessage", chat_id=chat, text=text, **extra)
-        except (httpx.HTTPError, TelegramError) as exc:
-            log.warning("telegram send failed: %s", exc)
-            return None
+
+        for attempt in range(2):
+            await self._throttle()
+            try:
+                return await self._call("sendMessage", chat_id=chat, text=text, **extra)
+            except httpx.HTTPStatusError as exc:
+                # Telegram says exactly how long to wait. Honour it once rather
+                # than dropping a message that would have gone through.
+                if exc.response.status_code == 429 and attempt == 0:
+                    delay = _retry_after(exc.response)
+                    log.warning("telegram rate limited; waiting %.1fs", delay)
+                    await self._sleep(delay)
+                    continue
+                log.warning("telegram send failed: %s", exc)
+                return None
+            except (httpx.HTTPError, TelegramError) as exc:
+                log.warning("telegram send failed: %s", exc)
+                return None
+        return None
 
     # --- listener ------------------------------------------------------------
 
@@ -260,21 +322,52 @@ class TelegramNotifier(Notifier):
         elif command == "/pause":
             self.store.set(PAUSED_KEY, True)
             self.store.set(PAUSE_REASON_KEY, rest or "paused from Telegram")
+            # Clear the challenge flag, or a stale one left by an earlier
+            # captcha would let the agent quietly resume a pause a human asked
+            # for. Only the agent's own challenge pause is self-recoverable.
+            self.store.set(CHALLENGE_PAUSE_KEY, False)
             await self._send("Paused. Nothing will be claimed until you /resume.")
         elif command == "/resume":
             self.store.set(PAUSED_KEY, False)
             self.store.set(PAUSE_REASON_KEY, "")
+            self.store.set(CHALLENGE_PAUSE_KEY, False)
             await self._send("Resumed. Watching for shifts again.")
         elif command == "/schedule":
             await self._send(self.store.get("schedule_summary") or "No schedule summary available.")
+        elif command == "/ask":
+            await self._ask(rest)
         else:
             await self._send(
                 "Commands:\n"
                 "/status - is the agent running, what did it see\n"
                 "/pause - stop claiming\n"
                 "/resume - start again\n"
-                "/schedule - show your availability"
+                "/schedule - show your availability\n"
+                "/ask <question> - ask about a shift or a rule"
             )
+
+    async def _ask(self, question: str) -> None:
+        """An explicit spelling of the plain-text path.
+
+        Bare text already reaches the assistant via `_handle_chat`; `/ask` is
+        here because a bot that lists its commands should answer the one people
+        type after reading that list. Both go to the same hub, so the dashboard
+        panel and Telegram stay one conversation.
+        """
+        question = (question or "").strip()
+        if not question:
+            await self._send("Ask me something, for example: /ask why did you skip M8W77")
+            return
+        await self._handle_chat(question)
+
+    async def system(self, text: str) -> None:
+        """A health event rather than a shift event.
+
+        Split from `alert` so the reason is visible at the call site: these are
+        the messages that tell someone the agent has stopped being useful, which
+        is otherwise only discoverable by noticing silence.
+        """
+        await self._send(f"🩺 {text}")
 
     def _status_text(self) -> str:
         paused = bool(self.store.get(PAUSED_KEY, False))

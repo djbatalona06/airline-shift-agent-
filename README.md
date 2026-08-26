@@ -16,9 +16,12 @@ asks you to confirm before it takes anything.
 Job-agnostic by design. Adding a new employer means writing one adapter class;
 everything else — scheduling, notifications, dashboard, packaging — is shared.
 
-**Status:** core complete, 244 tests. The FLICA adapter's parsers are tested
-against fixtures; the live browser path has not yet run a full week against a
-real portal.
+**Status:** core complete, 364 tests, plus 11 browser-driven tests that run the
+real FLICA adapter against a fake portal on loopback. Every command in this
+README and in [docs/INSTALL.md](docs/INSTALL.md) has been executed and checked — see
+[docs/VERIFICATION.md](docs/VERIFICATION.md) for what passed and, more usefully,
+what is still unproven. The FLICA adapter's parsers are tested against fixtures;
+**no live sign-in to a real portal has happened yet.**
 
 ---
 
@@ -37,22 +40,34 @@ real portal.
 
 ### What it deliberately does not do
 
-- **It does not solve captchas.** When the portal challenges, it pauses and asks
-  you. Captcha-solving services are how accounts get flagged, and a flagged
-  account on a crew system is a disciplinary matter.
+- **It does not solve captchas on the way to a shift.** When the portal
+  challenges, the claiming path pauses and asks you. It ships with a toolkit
+  that *can* work a challenge (see below), and that toolkit is deliberately not
+  wired into the part of the app that touches your employer — because a flagged
+  account on a crew system is a disciplinary matter, not a retry-tomorrow
+  inconvenience.
 - **It does not model legality.** It enforces plain scheduling hygiene, not
   FAA duty limits or nursing ratios. The portal is authoritative; a
   half-correct legality model would be worse than none.
 - **It never changes your home base.** Picking up from the wrong domicile means
   being rostered out of a city you do not live in.
 
-### Friction toolkit (built in, kept separate from portal auth)
+### Friction toolkit (built in, kept away from portal auth)
 
-A built-in, portal-agnostic helper — a vision-model action loop and IMAP OTP
-reader for handling web-auth friction generically (`shift-agent
-friction-bench` and friends). It ships with the app and needs no separate
-install, but it is never part of the shift-claiming path and is not targeted
-at FLICA specifically. See
+The app ships a portal-agnostic way to work a login challenge: screenshot the
+page, ask a vision model for one action, execute it, repeat — plus an IMAP
+reader that pulls a one-time code out of your mailbox instead of your phone.
+`shift-agent friction-bench` runs the loop against Google's public reCAPTCHA
+demo page and prints PASS/FAIL. That is a real capability, installed by default,
+and this README does not pretend otherwise.
+
+What keeps it separate from your employer is a boundary, not an absence:
+nothing in `friction/` is imported by any `PortalAdapter`, and
+`tests/test_friction_boundary.py` fails the build the moment one mentions it.
+Pointing it at a live crew portal would be a new written decision, and it is the
+kind of decision to make with your eyes open — read
+[docs/CAPTCHA.md](docs/CAPTCHA.md) on what a flagged account actually costs
+before you make it. Full description in
 [docs/FRICTION_TOOLKIT.md](docs/FRICTION_TOOLKIT.md).
 
 ---
@@ -68,9 +83,10 @@ at FLICA specifically. See
 
 **On picking the server option:** it is the only one that survives your computer
 being off, and it costs a real trade. FLICA challenges the sign-in with a
-"confirm you are human" box, this agent refuses to solve those, and a server has
-no screen — so clearing one means opening a remote view rather than clicking
-once. Datacenter addresses also get challenged *more* than home connections. If
+"confirm you are human" box, the claiming path hands those to you rather than
+working them, and a server has no screen — so clearing one means opening a
+remote view rather than clicking once. Datacenter addresses also get challenged
+*more* than home connections. If
 you have a computer that can stay on, that is the easier answer.
 [docs/VPS.md](docs/VPS.md) opens with the full comparison, then walks the whole
 setup for someone who has never used Linux.
@@ -112,6 +128,12 @@ next time you open it. History lives in the agent's own database, so reopening
 the page resumes the conversation rather than starting a new one — nothing
 depends on a browser cookie surviving.
 
+The cards tell you *what* happened; the assistant tells you *why*, and will
+answer a follow-up:
+
+> **why did you skip M8W77?**
+> It starts at 23:40 and your Friday window closes at 22:00.
+
 Cross-device works through Telegram rather than by exposing the dashboard,
 because the dashboard deliberately refuses connections from anything but the
 machine it runs on. Your phone already has the whole thread.
@@ -120,6 +142,13 @@ Slash commands (`/status`, `/pause`, `/resume`, `/schedule`) still take their
 direct path with no model involved, so the command that stops claiming stays the
 fastest one. And the assistant **cannot claim a shift** — that still needs your
 Confirm on an offer. See [docs/SECURITY.md](docs/SECURITY.md).
+
+It runs on Claude, and reuses the one API key the friction toolkit already
+stores rather than asking you to set up a second thing:
+
+```bash
+shift-agent friction-set-vision-key   # OS keychain, never a file
+```
 
 ---
 
@@ -149,6 +178,9 @@ unreachable detail page results in an alert, never a claim.
   `0600` file owned by the service account — weaker, and
   [documented as such](docs/SECURITY.md#where-things-are-stored).
 - The database and dashboard hold your schedule and **no secrets**.
+- **The chat assistant is off until you set it up**, and if you enable it with a
+  hosted model your questions and shift data go to that provider. A local model
+  keeps everything on your machine.
 - Nothing is sent anywhere except the portal you configure and, if you set it
   up, your own Telegram bot.
 
@@ -207,7 +239,21 @@ python -m venv .venv
 .venv/Scripts/python.exe -m pytest -q
 ```
 
-Tests run with no network, no browser, and no account.
+`pytest -q` runs with no network, no browser, and no account.
+
+The browser-driven tests are a second tier, deselected by default:
+
+```bash
+pytest -m e2e          # add xvfb-run -a on a headless Linux box
+```
+
+They start a fake FLICA on loopback — the real fixtures, plus the login,
+challenge and expired pages the fixtures never had — and drive the **real**
+adapter through Chromium: frames, the persistent profile, challenge detection
+and recovery, and whether a poll cycle actually sees new data. Building it found
+eight defects in the browser layer, listed in
+[docs/PARSING.md](docs/PARSING.md) — two of which had silently disabled
+behaviour this README documents.
 
 The server path is verified in a throwaway Ubuntu container rather than by
 reading the script:

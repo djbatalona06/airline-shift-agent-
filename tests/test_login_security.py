@@ -274,9 +274,14 @@ class LeakyChallengeAdapter(MockAdapter):
 
 
 async def test_login_failure_text_is_scrubbed_before_it_leaves_the_machine(tmp_path):
-    """`_loop` forwards this exception's text to notifier.alert, which on
-    Telegram is a third party. logging_safe protected the log file but not the
-    one channel that actually leaves."""
+    """`_loop` forwards this exception's text to the notifier, which on Telegram
+    is a third party. logging_safe protected the log file but not the one
+    channel that actually leaves.
+
+    Every outbound kind is checked rather than `alert` alone: which channel a
+    health event uses is a presentation decision that has already changed once,
+    and the scrubbing guarantee must not quietly lapse the next time it does.
+    """
     config = make_config()
     adapter = LeakyAdapter(config, auth_state=AuthState.FAILED)
     notifier = ConsoleNotifier(auto_confirm=True)
@@ -288,8 +293,8 @@ async def test_login_failure_text_is_scrubbed_before_it_leaves_the_machine(tmp_p
     poller = Poller(config, adapter, notifier, store, sleep=no_sleep)
     await poller.run_forever(max_cycles=3)
 
-    alerts = [text for kind, text in notifier.sent if kind == "alert"]
-    assert alerts, "expected the consecutive-failure alert"
+    alerts = [text for kind, text in notifier.sent if kind in ("alert", "system")]
+    assert alerts, "expected the consecutive-failure notice"
     blob = "\n".join(alerts)
     assert "DEADBEEF0123456789ABCDEF0123" not in blob
     assert "crew@airline.example" not in blob

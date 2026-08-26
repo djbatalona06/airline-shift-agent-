@@ -685,7 +685,10 @@ button:focus-visible, select:focus-visible, .tab:focus-visible {
       chatSend.textContent = "Sending…";
       fetch(CHAT_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        // X-Shift-Agent is what makes this a preflighted request. A page on
+        // another origin cannot set it, and the server refuses the write
+        // without it. See _origin_ok in dashboard/server.py.
+        headers: { "Content-Type": "application/json", "X-Shift-Agent": "1" },
         body: JSON.stringify({ text: text })
       }).then(function () {
         chatInput.value = "";

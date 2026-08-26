@@ -108,11 +108,43 @@ class _Handler(BaseHTTPRequestHandler):
             CONTENT_TYPES.get(target.suffix, "application/octet-stream"),
         )
 
+    def _origin_ok(self) -> bool:
+        """Guards a *write* route, where loopback plus a token is not enough.
+
+        The token stops a local process that cannot see the URL. It does not
+        stop a page in another tab that can: DNS rebinding makes an attacker's
+        hostname resolve to 127.0.0.1, at which point their JavaScript is
+        same-origin with this server and any URL the browser has ever held is
+        reachable from it.
+
+        Two cheap checks close that. Pinning `Host` to a literal loopback
+        address means a rebound hostname never matches, since the browser sends
+        the name it dialled. Requiring `X-Shift-Agent` forces a CORS preflight
+        for anything cross-origin, and the preflight is not answered - a form
+        POST or a no-cors fetch cannot set a custom header at all. `Origin` is
+        checked when present rather than required, because a same-origin
+        navigation legitimately omits it.
+        """
+        host = (self.headers.get("Host") or "").strip()
+        if host not in (f"127.0.0.1:{self.server.server_address[1]}", "127.0.0.1"):
+            return False
+        if self.headers.get("X-Shift-Agent") != "1":
+            return False
+        origin = self.headers.get("Origin")
+        if origin and origin != f"http://{host}":
+            return False
+        return True
+
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         if self._route() != CHAT_ROUTE:
             self._deny()
             return
         if self._hub is None:
+            self._deny()
+            return
+        # Same 404 as a wrong token, so a rejected write tells an attacker
+        # nothing about whether the token they used was right.
+        if not self._origin_ok():
             self._deny()
             return
 

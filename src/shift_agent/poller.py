@@ -14,6 +14,7 @@ import random
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, time, timedelta
+from time import monotonic
 from pathlib import Path
 
 import httpx
@@ -25,6 +26,7 @@ from .models import AuthState, ClaimOutcome, ClaimResult, MatchResult, MatchVerd
 from .notify.base import Notifier, describe
 from .schedule import ScheduleEngine
 from .store import (
+    CHALLENGE_PAUSE_KEY,
     LAST_CYCLE_KEY,
     LAST_DIGEST_KEY,
     LOGIN_FAILURES_KEY,
@@ -37,6 +39,11 @@ log = logging.getLogger(__name__)
 
 MAX_BACKOFF_SECONDS = 900.0
 FAILURES_BEFORE_ALERT = 3
+# How long to wait before re-probing a challenge pause, and the ceiling it
+# widens to. Starts short because a challenge cleared by hand should resume
+# almost at once; ends long because an unattended one must not be hammered.
+CHALLENGE_PROBE_START = 60.0
+CHALLENGE_PROBE_MAX = 900.0
 HEARTBEAT_SECONDS = 300.0
 
 # Verdicts that mean "tell her, but never act on it".
@@ -90,6 +97,11 @@ class Poller:
         self.sleep = sleep or asyncio.sleep
         self.consecutive_failures = 0
         self._tz = config.availability.tz
+        # Monotonic so the self-resume schedule survives a wall-clock change,
+        # and injectable for the same reason `sleep` is.
+        self._monotonic = monotonic
+        self._probe_backoff = CHALLENGE_PROBE_START
+        self._probe_after = 0.0
 
     # --- gating --------------------------------------------------------------
 
@@ -113,13 +125,55 @@ class Poller:
     def login_failures(self, value: int) -> None:
         self.store.set(LOGIN_FAILURES_KEY, int(value))
 
-    def pause(self, reason: str = "") -> None:
+    def pause(self, reason: str = "", *, recoverable: bool = False) -> None:
         self.store.set(PAUSED_KEY, True)
         self.store.set(PAUSE_REASON_KEY, reason)
+        # A challenge is the one pause the agent can get itself out of: someone
+        # may clear it in the browser without ever sending /resume. A failed
+        # login is not - retrying that is how an account gets locked.
+        self.store.set(CHALLENGE_PAUSE_KEY, recoverable)
+        self._probe_after = 0.0
 
     def resume(self) -> None:
         self.store.set(PAUSED_KEY, False)
         self.store.set(PAUSE_REASON_KEY, "")
+        self.store.set(CHALLENGE_PAUSE_KEY, False)
+
+    async def _try_self_resume(self) -> bool:
+        """Re-probe a challenge pause on a widening interval.
+
+        Without this the agent waits for a human even after the challenge is
+        gone: it wakes every ~45s, sees `paused`, and returns immediately,
+        forever. On a 24/7 box that is the difference between a two-minute
+        interruption and a silent outage until someone happens to look.
+
+        Backs off so a genuinely unattended challenge is not hammered - a
+        request every 45 seconds against a portal that just challenged us is
+        exactly the traffic that earns another one.
+        """
+        if not bool(self.store.get(CHALLENGE_PAUSE_KEY, False)):
+            return False
+
+        now = self._monotonic()
+        if now < self._probe_after:
+            return False
+
+        try:
+            recovered = await self.adapter.is_authenticated()
+        except Exception as exc:
+            log.debug("self-resume probe failed: %s", scrub(exc))
+            recovered = False
+
+        if recovered:
+            self.resume()
+            self._probe_backoff = CHALLENGE_PROBE_START
+            log.info("challenge cleared; resuming on its own")
+            await self.notifier.system("The verification challenge is gone. Watching again.")
+            return True
+
+        self._probe_backoff = min(self._probe_backoff * 2, CHALLENGE_PROBE_MAX)
+        self._probe_after = now + self._probe_backoff
+        return False
 
     def in_quiet_hours(self, now: datetime | None = None) -> bool:
         qh = self.config.poll.quiet_hours
@@ -133,7 +187,7 @@ class Poller:
     async def run_once(self) -> CycleReport:
         report = CycleReport()
 
-        if self.paused:
+        if self.paused and not await self._try_self_resume():
             report.skipped = "paused"
             return report
         if self.in_quiet_hours():
@@ -147,7 +201,12 @@ class Poller:
                 # from the portal, Telegram is a third party, and a crew-portal
                 # URL can carry a session parameter. She still gets a usable
                 # link - see docs/SECURITY.md.
-                self.pause(scrub(auth.detail) if auth.detail else "challenge")
+                #
+                # `recoverable` because a challenge is the one pause the agent
+                # can clear by itself once the portal stops asking.
+                self.pause(
+                    scrub(auth.detail) if auth.detail else "challenge", recoverable=True
+                )
                 await self.notifier.needs_human(
                     scrub(auth.detail) if auth.detail else "The portal is asking for verification.",
                     scrub(auth.challenge_url) if auth.challenge_url else None,
@@ -162,7 +221,7 @@ class Poller:
                     # locks the account out - a far worse outcome than any missed
                     # shift. Stop and hand it to a human.
                     self.pause(f"{self.login_failures} failed logins")
-                    await self.notifier.alert(
+                    await self.notifier.system(
                         f"Sign-in failed {self.login_failures} times, so I've stopped to avoid "
                         f"locking your account. Check the password, then send /resume."
                     )
@@ -174,6 +233,12 @@ class Poller:
                 # session token.
                 raise RuntimeError(f"login failed: {scrub(auth.detail)}")
             self.login_failures = 0
+
+        # Before evaluating anything new, find out what actually happened to the
+        # requests already submitted. On a portal that decides asynchronously
+        # this is the only thing that turns "submitted" into "awarded" or
+        # "unable", and without it the three-strikes rule never fires.
+        await self._reconcile_claims()
 
         open_shifts = await self.adapter.fetch_open_shifts()
         assigned = await self.adapter.fetch_my_schedule()
@@ -366,8 +431,41 @@ class Poller:
             result = await self.adapter.claim(shift.id)
 
         self.store.record_claim(self.config.name, shift.id, result, dry_run=dry)
+        # A real submission is provisional until the portal says otherwise, so
+        # queue it for re-reading. Dry runs never asked the portal anything and
+        # have nothing to reconcile.
+        if not dry and result.outcome is ClaimOutcome.CLAIMED:
+            self.store.mark_pending_claim(self.config.name, shift.id)
         await self.notifier.claim_outcome(shift, result, dry)
         return result
+
+    async def _reconcile_claims(self) -> None:
+        """Turn submitted requests into decided ones.
+
+        Anything that raises is left queued: a portal blip must not silently
+        convert a pending request into a permanent unknown.
+        """
+        user = self.config.name
+        for shift_id in self.store.pending_claims(user):
+            try:
+                outcome = await self.adapter.check_outcome(shift_id)
+            except Exception as exc:
+                log.warning("could not check outcome for %s: %s", shift_id, scrub(exc))
+                continue
+            if outcome is None:
+                continue  # still pending; look again next cycle
+
+            self.store.replace_claim_outcome(user, shift_id, outcome)
+            self.store.clear_pending_claim(user, shift_id)
+            if outcome.outcome is not ClaimOutcome.CLAIMED:
+                # Now visible to failed_attempts, which is what makes the
+                # three-strikes rule work on a portal that decides late.
+                await self.notifier.alert(
+                    f"Request for {shift_id} came back as {outcome.outcome.value.replace('_', ' ')}"
+                    f"{f': {outcome.detail}' if outcome.detail else ''}."
+                )
+            else:
+                await self.notifier.info(f"Request for {shift_id} was awarded.")
 
     async def _ping_healthcheck(self) -> None:
         """Dead-man's switch.
@@ -433,7 +531,9 @@ class Poller:
                 if self.consecutive_failures == FAILURES_BEFORE_ALERT:
                     # Scrubbed: this is the one error path that reaches a third
                     # party, and `exc` is frequently a raw portal/browser error.
-                    await self.notifier.alert(
+                    # `system`, not `alert`: agent health is not a shift offer,
+                    # and conflating the two is how the useful ones get muted.
+                    await self.notifier.system(
                         f"Shift agent has failed {self.consecutive_failures} times in a row. "
                         f"Latest error: {scrub(exc)}"
                     )
