@@ -74,7 +74,8 @@ class TelegramNotifier(Notifier):
         chat_id: int | None = None,
         tz: tzinfo | None = None,
         poll_timeout: int = 25,
-        chat_agent: Any = None,
+        user: str | None = None,
+        hub: Any = None,
         min_send_interval: float = MIN_SEND_INTERVAL,
         clock: Any = None,
         sleep: Any = None,
@@ -85,9 +86,13 @@ class TelegramNotifier(Notifier):
         self.link_code = link_code
         self.tz = tz
         self.poll_timeout = poll_timeout
-        # The same assistant the dashboard bubble uses, so /ask and the panel
-        # give the same answers. None means /ask politely declines.
-        self.chat_agent = chat_agent
+        # Profile name, needed only to expire the link code from the keychain
+        # once it has been used. Optional so tests can build a notifier without
+        # touching the OS keychain at all.
+        self.user = user
+        # Set by main._run when the chat surface is enabled. None means plain
+        # text gets the help blurb, exactly as before.
+        self.hub = hub
         self._pending: dict[str, tuple[asyncio.Future[bool], str]] = {}
         self._listener: asyncio.Task[None] | None = None
         self._min_send_interval = min_send_interval
@@ -100,6 +105,24 @@ class TelegramNotifier(Notifier):
 
         if chat_id is not None and self.linked_chat_id is None:
             self.store.set(TELEGRAM_CHAT_KEY, chat_id)
+
+    def _forget_link_code(self) -> None:
+        """Expire the used link code from the keychain.
+
+        Clearing `self.link_code` alone only makes it single-use *in this
+        process*: `main._build_notifier` reads it back from the keychain on
+        every start, so without this a restart revives a code that has already
+        been spent.
+        """
+        if not self.user:
+            return
+        try:
+            from .. import secrets as _keychain
+
+            _keychain.delete(self.user, "telegram_link_code")
+        except Exception as exc:
+            # An unavailable keychain must not undo a successful link.
+            log.warning("could not expire the used link code: %s", exc)
 
     # --- plumbing ------------------------------------------------------------
 
@@ -246,7 +269,24 @@ class TelegramNotifier(Notifier):
             log.warning("ignoring command from unlinked chat %s", chat_id)
             return
 
+        # Slash commands keep their direct path with no model in the loop, so
+        # /pause stays instant when it matters. Anything else is conversation.
+        if not text.startswith("/"):
+            await self._handle_chat(text)
+            return
+
         await self._run_command(command, rest)
+
+    async def _handle_chat(self, text: str) -> None:
+        if self.hub is None:
+            await self._send(
+                "I can't chat yet - start the agent with --dashboard to enable it.\n"
+                "Commands I do understand: /status /pause /resume /schedule"
+            )
+            return
+        reply = await self.hub.post(text, source="telegram")
+        if reply:
+            await self._send(reply)
 
     async def _try_link(self, chat_id: int | None, supplied: str) -> None:
         """Bind the bot to a chat, gated on a one-time code.
@@ -260,9 +300,14 @@ class TelegramNotifier(Notifier):
                 text="This agent has no link code configured. Run: shift-agent link",
             )
             return
-        if _secrets.compare_digest(supplied, self.link_code):
+        # Compared as bytes. The str form of compare_digest is ASCII-only and
+        # raises TypeError otherwise, which `consume` would swallow - leaving
+        # someone whose keyboard inserted a smart quote with no reply at all
+        # rather than "Invalid link code".
+        if _secrets.compare_digest(supplied.encode("utf-8"), self.link_code.encode("utf-8")):
             self.store.set(TELEGRAM_CHAT_KEY, chat_id)
-            self.link_code = None  # single use
+            self.link_code = None  # single use, in this process
+            self._forget_link_code()
             await self._call(
                 "sendMessage", chat_id=chat_id,
                 text="Linked. I'll message you when a matching shift opens.\n"
@@ -302,34 +347,18 @@ class TelegramNotifier(Notifier):
             )
 
     async def _ask(self, question: str) -> None:
-        """Answer from the same assistant the dashboard bubble uses.
+        """An explicit spelling of the plain-text path.
 
-        Config changes are deliberately not offered here. Approving a diff needs
-        somewhere to read the diff, and a chat message is not that; the proposal
-        would be approved on the strength of a one-line summary.
+        Bare text already reaches the assistant via `_handle_chat`; `/ask` is
+        here because a bot that lists its commands should answer the one people
+        type after reading that list. Both go to the same hub, so the dashboard
+        panel and Telegram stay one conversation.
         """
-        if self.chat_agent is None:
-            await self._send(
-                "No assistant is set up. Run 'shift-agent set-llm-key' on the machine "
-                "running the agent."
-            )
-            return
         question = (question or "").strip()
         if not question:
             await self._send("Ask me something, for example: /ask why did you skip M8W77")
             return
-
-        try:
-            reply = await self.chat_agent.ask(question)
-        except Exception as exc:
-            log.warning("/ask failed: %s", exc)
-            await self._send("I could not answer that just now.")
-            return
-
-        text = (reply.text or "").strip() or "I do not have an answer for that."
-        if reply.proposal:
-            text += "\n\nI can suggest a settings change for this - open the dashboard to see the diff and approve it."
-        await self._send(text)
+        await self._handle_chat(question)
 
     async def system(self, text: str) -> None:
         """A health event rather than a shift event.

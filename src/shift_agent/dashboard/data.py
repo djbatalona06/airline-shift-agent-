@@ -194,35 +194,13 @@ def build_verdict_breakdown(shifts: list[dict[str, Any]]) -> list[dict[str, Any]
     ]
 
 
-ONBOARDED_KEY = "onboarding_done"
-
-
-def build_chat(store: Store, config: UserConfig, *, backed: bool = False) -> dict[str, Any]:
-    """What the page needs to draw the chat bubble. No key material, ever.
-
-    `backed` says whether a server with a POST route is actually behind this
-    page. It is False for a dashboard written to disk and opened as a file, and
-    for the published demo — both of which get the browser-mode offer instead of
-    a chat box that would silently fail.
-    """
-    return {
-        "backed": backed,
-        "mode": config.llm.mode.value,
-        "provider": config.llm.provider.value,
-        "model": config.llm.model,
-        "configured": bool(store.get(ONBOARDED_KEY, False)),
-        "telegram_linked": store.get("telegram_linked_chat_id") is not None,
-    }
-
-
-def build_payload(store: Store, config: UserConfig, *, chat_backed: bool = False) -> dict[str, Any]:
+def build_payload(store: Store, config: UserConfig) -> dict[str, Any]:
     shifts = build_shifts(store, config)
     return {
         "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "timezone": config.availability.timezone,
         "status": build_status(store, config),
         "settings": build_settings(store, config),
-        "chat": build_chat(store, config, backed=chat_backed),
         "metrics": build_metrics(shifts),
         "verdicts": build_verdict_breakdown(shifts),
         "shifts": shifts,

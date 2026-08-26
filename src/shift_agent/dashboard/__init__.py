@@ -76,11 +76,11 @@ def _write_atomic(path: Path, content: str) -> None:
 
 
 def build_dashboard(
-    store: Store, config: UserConfig, outdir: str | Path, *, chat_backed: bool = False
+    store: Store, config: UserConfig, outdir: str | Path, chat_url: str | None = None
 ) -> Path:
     """Write index.html, shifts.ics and shifts.md. Returns the index path."""
     outdir = Path(outdir)
-    payload = build_payload(store, config, chat_backed=chat_backed)
+    payload = build_payload(store, config)
 
     calendar = build_calendar(payload["shifts"], name=f"Shift agent — {config.name}")
     markdown = build_markdown(payload["shifts"], timezone=payload["timezone"])
@@ -88,6 +88,9 @@ def build_dashboard(
     # Carried in the payload so the copy button works with no network call.
     payload["markdown"] = markdown
     payload["ics_url"] = ICS
+    # Absent for a statically built dashboard - no running agent means no chat
+    # endpoint, and the tab says so rather than offering a dead input box.
+    payload["chat_url"] = chat_url
 
     _write_atomic(outdir / ICS, calendar)
     _write_atomic(outdir / MARKDOWN, markdown)
@@ -97,7 +100,7 @@ def build_dashboard(
 
 
 def try_build_dashboard(
-    store: Store, config: UserConfig, outdir: str | Path, *, chat_backed: bool = False
+    store: Store, config: UserConfig, outdir: str | Path, chat_url: str | None = None
 ) -> Path | None:
     """Build, swallowing any failure.
 
@@ -105,7 +108,7 @@ def try_build_dashboard(
     with it. The exception is logged rather than lost.
     """
     try:
-        return build_dashboard(store, config, outdir, chat_backed=chat_backed)
+        return build_dashboard(store, config, outdir, chat_url)
     except Exception:
         log.exception("dashboard build failed; polling continues")
         return None

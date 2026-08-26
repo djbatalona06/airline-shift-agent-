@@ -1,5 +1,7 @@
 # Shift Agent
 
+**Last updated:** 2026-08-19
+
 A plug-and-playable agent that picks up first-come, first-served shifts from
 your employer's portal.
 
@@ -14,10 +16,9 @@ asks you to confirm before it takes anything.
 Job-agnostic by design. Adding a new employer means writing one adapter class;
 everything else — scheduling, notifications, dashboard, packaging — is shared.
 
-**Status:** core complete, 356 tests, plus 21 browser-driven tests that run the
-real adapter and the real dashboard against a fake portal on loopback. Every
-command in this README and in
-[docs/INSTALL.md](docs/INSTALL.md) has been executed and checked — see
+**Status:** core complete, 364 tests, plus 11 browser-driven tests that run the
+real FLICA adapter against a fake portal on loopback. Every command in this
+README and in [docs/INSTALL.md](docs/INSTALL.md) has been executed and checked — see
 [docs/VERIFICATION.md](docs/VERIFICATION.md) for what passed and, more usefully,
 what is still unproven. The FLICA adapter's parsers are tested against fixtures;
 **no live sign-in to a real portal has happened yet.**
@@ -34,6 +35,8 @@ what is still unproven. The FLICA adapter's parsers are tested against fixtures;
 - **Gives up sensibly.** Three failed attempts on the same shift and it stops.
 - **Shows you what happened** in a dashboard — what it saw, what it skipped and
   why, and what it picked up.
+- **Answers questions**, in the dashboard's chat panel or in the same Telegram
+  chat it already messages you in. One conversation, both places.
 
 ### What it deliberately does not do
 
@@ -45,6 +48,15 @@ what is still unproven. The FLICA adapter's parsers are tested against fixtures;
   half-correct legality model would be worse than none.
 - **It never changes your home base.** Picking up from the wrong domicile means
   being rostered out of a city you do not live in.
+
+### Friction toolkit (built in, kept separate from portal auth)
+
+A built-in, portal-agnostic helper — a vision-model action loop and IMAP OTP
+reader for handling web-auth friction generically (`shift-agent
+friction-bench` and friends). It ships with the app and needs no separate
+install, but it is never part of the shift-claiming path and is not targeted
+at FLICA specifically. See
+[docs/FRICTION_TOOLKIT.md](docs/FRICTION_TOOLKIT.md).
 
 ---
 
@@ -78,9 +90,8 @@ Runs the whole pipeline on fabricated data — no config, credentials, or networ
 
 ## The dashboard
 
-Three tabs — Overview, Settings, Calendar — with four colour themes and a
-theme switcher that remembers your choice, plus a chat bubble you can ask
-questions.
+Four tabs — Overview, Settings, Calendar, Chat — with four colour themes and a
+theme switcher that remembers your choice.
 
 - **Overview** — status, counts, and a card per shift showing its position grade
   and why it was or wasn't taken.
@@ -88,33 +99,43 @@ questions.
 - **Calendar** — month grid, or an agenda list on a phone. Exports `.ics` for
   Apple Calendar, Outlook and Google Calendar, and markdown for Obsidian or
   Notion.
+- **Chat** — ask why a shift was skipped, what it's seen today, or tell it to
+  pause. Needs the agent running: `shift-agent run --config … --dashboard`.
 
 It is served on `127.0.0.1` with a random token in the URL, never on a public
 interface. Verified: a missing token, a wrong token, and a path-traversal
 attempt all return the same 404, and the port refuses connections from anything
 but loopback.
 
-### Asking it questions
+### One conversation, two front doors
 
-The cards tell you *what* happened. The chat bubble tells you *why*, and will
+The Chat tab and the Telegram bot are the same thread. Type in the dashboard and
+it appears in Telegram; reply from your phone and it appears in the dashboard
+next time you open it. History lives in the agent's own database, so reopening
+the page resumes the conversation rather than starting a new one — nothing
+depends on a browser cookie surviving.
+
+The cards tell you *what* happened; the assistant tells you *why*, and will
 answer a follow-up:
 
 > **why did you skip M8W77?**
 > It starts at 23:40 and your Friday window closes at 22:00.
 
-It can read what the agent saw, skipped and picked up, explain the rules in
-force, and propose a change to them — shown as a diff you press **Apply** on.
-It cannot claim a shift, sign in, or clear a challenge. Same assistant answers
-`/ask` in Telegram.
+Cross-device works through Telegram rather than by exposing the dashboard,
+because the dashboard deliberately refuses connections from anything but the
+machine it runs on. Your phone already has the whole thread.
+
+Slash commands (`/status`, `/pause`, `/resume`, `/schedule`) still take their
+direct path with no model involved, so the command that stops claiming stays the
+fastest one. And the assistant **cannot claim a shift** — that still needs your
+Confirm on an offer. See [docs/SECURITY.md](docs/SECURITY.md).
+
+It runs on Claude, and reuses the one API key the friction toolkit already
+stores rather than asking you to set up a second thing:
 
 ```bash
-shift-agent set-llm-key        # stored in the OS keychain, never in a file
+shift-agent friction-set-vision-key   # OS keychain, never a file
 ```
-
-Claude by default. It also speaks to any OpenAI-compatible endpoint, and
-pointing `llm.base_url` at a local Ollama means **nothing leaves your machine**
-and no key is needed at all — see [docs/SECURITY.md](docs/SECURITY.md), which is
-explicit about what a hosted model does and does not receive.
 
 ---
 

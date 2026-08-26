@@ -35,6 +35,21 @@ in the frozen build purely because `spike.py` reached them through
 `__import__(name)` in a loop. Adding them as hidden imports fixed it. They need
 no hidden import in the real app, which imports them statically.
 
+## The friction toolkit's dependency (`anthropic`)
+
+`anthropic` is a base dependency now (`src/shift_agent/friction/`), reached
+by `main.py`'s `friction-*` subcommands through the same kind of lazy,
+inside-a-function import already used for `_dashboard`/`_recon` — PyInstaller's
+static analysis parses whole files, including function bodies, so this
+should need no extra `--hidden-import` entry, unlike the adapter registry
+below. Still: **smoke-test `ShiftAgent.exe friction-bench --help` before
+shipping a release.** If the `anthropic` SDK does its own dynamic imports
+internally and PyInstaller misses one, the fix is an additional
+`--hidden-import` in `build_release.ps1`, not a change to `friction/` itself.
+Expect the zip to grow modestly versus the 13.7 MB baseline below —
+`anthropic` and its light dependency set (`distro`, `jiter`, `sniffio`,
+`docstring_parser`) are now bundled.
+
 ## The trap for the real build
 
 `adapters/base.py` resolves adapters through a **registry populated by

@@ -78,7 +78,7 @@ def _schedule_summary(config: UserConfig) -> str:
     return "\n".join(lines)
 
 
-def _build_notifier(config: UserConfig, store: Store, http: httpx.AsyncClient, chat=None):
+def _build_notifier(config: UserConfig, store: Store, http: httpx.AsyncClient):
     """Telegram when a bot token is present, console otherwise.
 
     Falling back to console rather than failing keeps the agent monitoring even
@@ -104,12 +104,37 @@ def _build_notifier(config: UserConfig, store: Store, http: httpx.AsyncClient, c
         link_code=secrets.get(config.name, "telegram_link_code"),
         chat_id=config.notify.telegram_chat_id,
         tz=config.availability.tz,
-        # One assistant, two front doors: /ask and the dashboard bubble share it.
-        chat_agent=chat.agent if chat is not None else None,
+        user=config.name,
     )
     if notifier.linked_chat_id is None:
         print("Telegram token found but no chat linked yet. Run 'shift-agent link'.")
     return notifier
+
+
+def _build_chat_hub(config: UserConfig, store: Store, notifier):
+    """Wire the chat surface, or explain why it stayed off.
+
+    Needs the same vision/chat API key the friction toolkit uses - one key for
+    everything that talks to a model, rather than a second thing to set up.
+    Returns None when it is not configured, and the dashboard tab then renders
+    an explanation instead of a dead input box.
+    """
+    from .chat.agent import AnthropicChatClient, ChatAgent
+    from .chat.hub import ChatHub
+
+    key = secrets.get(config.name, "friction_vision_api_key")
+    if not key:
+        print(
+            "No API key stored, so chat is off. Enable it with:\n"
+            f"  shift-agent friction-set-vision-key --user {config.name}"
+        )
+        return None
+
+    agent = ChatAgent(config, store, AnthropicChatClient(key))
+    hub = ChatHub(config, store, agent, notifier=notifier)
+    if isinstance(notifier, TelegramNotifier):
+        notifier.hub = hub
+    return hub
 
 
 async def _run(args: argparse.Namespace) -> int:
@@ -138,33 +163,42 @@ async def _run(args: argparse.Namespace) -> int:
               file=sys.stderr)
         return 1
 
-    dashboard_dir = paths.dashboard_dir(config.name)
-    chat = _build_chat(config, store, args.config)
-
-    # Serve for the life of the process rather than only while a window is open.
-    # A 24/7 agent is exactly when someone wants to ask it what it has been
-    # doing, and without this the chat bubble would be dead on the very page the
-    # poller keeps rewriting.
-    server = None
-    if chat is not None:
-        from .dashboard.server import DashboardServer
-
-        server = DashboardServer(dashboard_dir, chat=chat)
-
     async with httpx.AsyncClient(timeout=30, follow_redirects=True) as http:
-        notifier = _build_notifier(config, store, http, chat=chat)
+        notifier = _build_notifier(config, store, http)
         if isinstance(notifier, TelegramNotifier):
             notifier.start()
 
+        dashboard_dir = paths.dashboard_dir(config.name)
+        server = None
+        chat_url = None
+        if args.dashboard:
+            from .dashboard.server import DashboardServer
+
+            hub = _build_chat_hub(config, store, notifier)
+            # The server's handler threads hop coroutines back onto this loop -
+            # store and Telegram client both belong to it.
+            server = DashboardServer(
+                dashboard_dir, hub=hub, loop=asyncio.get_running_loop()
+            )
+            server.start()
+            chat_url = server.chat_url() if hub else None
+            # Built before the first poll cycle finishes. The URL is printed
+            # right here and she will open it immediately; without this she gets
+            # whatever the last run left behind, or a chat panel claiming the
+            # agent is not running while it is.
+            from .dashboard import try_build_dashboard
+
+            try_build_dashboard(store, config, dashboard_dir, chat_url)
+            print(f"Dashboard: {server.url}")
+
         adapter = get_adapter(config.portal.adapter)(config, http, creds)
         poller = Poller(
-            config, adapter, notifier, store, dashboard_dir=dashboard_dir, chat_backed=server is not None
+            config, adapter, notifier, store,
+            dashboard_dir=dashboard_dir,
+            chat_url=chat_url,
         )
         mode = "DRY RUN" if config.dry_run else "LIVE"
         print(f"shift-agent starting for {config.name} [{mode}, claim_mode={config.claim_mode.value}]")
-        if server is not None:
-            dashboard_dir.mkdir(parents=True, exist_ok=True)
-            print(f"Dashboard and chat at {server.start()}")
         try:
             await adapter.start()
             if args.once:
@@ -189,51 +223,24 @@ async def _run(args: argparse.Namespace) -> int:
     return 0
 
 
-def _build_chat(config: UserConfig, store: Store, config_path: Path | None):
-    """Assemble the chat service, or return None with the reason printed.
-
-    Every failure here is non-fatal by design: a missing key or an unreachable
-    local model should cost the chat bubble, never the dashboard.
-    """
-    from .chat import ChatService, ProviderError, build_provider
-
-    try:
-        api_key = secrets.get(config.name, secrets.LLM_KEY)
-    except secrets.SecretsUnavailable as exc:
-        print(f"Chat disabled: could not read the secret store ({scrub(exc)}).")
-        return None
-
-    try:
-        provider = build_provider(config, api_key)
-    except ProviderError as exc:
-        print(f"Chat disabled: {exc}")
-        return None
-
-    return ChatService(store, config, provider, config_path=config_path)
-
-
 async def _dashboard(args: argparse.Namespace) -> int:
     from .dashboard import build_dashboard
 
     config = UserConfig.load(args.config)
     outdir = args.out or paths.dashboard_dir(config.name)
     store = Store(args.state or paths.state_db(config.name))
-
-    # The store has to stay open while the window does, since the assistant
-    # reads it live. Without --open nothing serves the page, so the chat bubble
-    # would have no backend and says so instead of failing on first use.
-    chat = _build_chat(config, store, args.config) if args.open else None
     try:
-        index = build_dashboard(store, config, outdir, chat_backed=chat is not None)
-        print(f"Dashboard written to: {index}")
-        if args.open:
-            _open_window(index, chat)
+        index = build_dashboard(store, config, outdir)
     finally:
         store.close()
+
+    print(f"Dashboard written to: {index}")
+    if args.open:
+        _open_window(index)
     return 0
 
 
-def _open_window(index: Path, chat=None) -> None:
+def _open_window(index: Path) -> None:
     """Serve the dashboard on loopback and show it as an app window.
 
     Served over HTTP rather than opened as a file: browsers block the clipboard
@@ -242,7 +249,7 @@ def _open_window(index: Path, chat=None) -> None:
     """
     from .dashboard.server import DashboardServer
 
-    server = DashboardServer(index.parent, chat=chat)
+    server = DashboardServer(index.parent)
     url = server.start()
     print(f"Serving at {url}")
     try:
@@ -312,25 +319,6 @@ async def _set_token(args: argparse.Namespace) -> int:
     return 0
 
 
-async def _set_llm_key(args: argparse.Namespace) -> int:
-    """Store the chat assistant's API key in the OS keychain.
-
-    Same reasoning as the Telegram token above: read via getpass so it never
-    lands in shell history or the process list. A local Ollama endpoint on
-    loopback needs no key at all, which is the cheapest way to keep her roster
-    off anyone else's servers.
-    """
-    import getpass
-
-    key = getpass.getpass("API key (input hidden): ").strip()
-    if not key:
-        print("No key entered.", file=sys.stderr)
-        return 1
-    secrets.put(args.user, secrets.LLM_KEY, key)
-    print(f"Stored for user {args.user!r}. The chat bubble on the dashboard will pick it up.")
-    return 0
-
-
 async def _link(args: argparse.Namespace) -> int:
     import secrets as _stdlib_secrets
 
@@ -348,6 +336,54 @@ async def _link(args: argparse.Namespace) -> int:
         "pausing the agent or confirming claims.\n"
     )
     return 0
+
+
+async def _friction_bench(args: argparse.Namespace) -> int:
+    """Benchmark the vision-model action loop against a public reCAPTCHA demo.
+
+    Never touches a real portal adapter or FLICA's login - see
+    docs/FRICTION_TOOLKIT.md for the boundary this respects.
+    """
+    from .friction.bench_recaptcha import run_benchmark
+
+    try:
+        result = await run_benchmark(args.user, headless=not args.headed, timeout_s=args.timeout_s)
+    except Exception as exc:
+        # Same contract as `_run`: a shipped app never shows a traceback, and
+        # the text is scrubbed because a failing browser or API call carries
+        # URLs and keys in its message.
+        print(f"\nBenchmark stopped: {scrub(exc)}", file=sys.stderr)
+        print("Run with -v for the full technical detail.", file=sys.stderr)
+        logging.getLogger(__name__).debug("friction-bench failed", exc_info=True)
+        return 1
+
+    status = "PASS" if result.success else "FAIL"
+    print(f"{status} in {result.elapsed_s:.1f}s ({result.steps} steps){': ' + result.detail if result.detail else ''}")
+    return 0 if result.success else 1
+
+
+async def _friction_otp(args: argparse.Namespace) -> int:
+    from .friction.cli import fetch_otp
+
+    try:
+        return await fetch_otp(args.user, timeout_s=args.timeout_s)
+    except Exception as exc:
+        print(f"\nCould not read the mailbox: {scrub(exc)}", file=sys.stderr)
+        print("Run with -v for the full technical detail.", file=sys.stderr)
+        logging.getLogger(__name__).debug("friction-otp failed", exc_info=True)
+        return 1
+
+
+async def _friction_set_vision_key(args: argparse.Namespace) -> int:
+    from .friction.cli import set_vision_key
+
+    return await set_vision_key(args.user)
+
+
+async def _friction_set_imap_password(args: argparse.Namespace) -> int:
+    from .friction.cli import set_imap_password
+
+    return await set_imap_password(args.user)
 
 
 async def _demo(args: argparse.Namespace) -> int:
@@ -414,6 +450,10 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--config", type=Path, required=True)
     run.add_argument("--once", action="store_true", help="single cycle, then exit")
     run.add_argument("--dry-run", action="store_true", help="never send a claim request")
+    run.add_argument(
+        "--dashboard", action="store_true",
+        help="serve the live dashboard on loopback, with the chat panel enabled",
+    )
     run.set_defaults(func=_run)
 
     demo = sub.add_parser("demo", help="run the pipeline on fabricated data")
@@ -441,9 +481,36 @@ def main(argv: list[str] | None = None) -> int:
     link.add_argument("--user", default="default")
     link.set_defaults(func=_link)
 
-    llm_key = sub.add_parser("set-llm-key", help="store the chat assistant's API key in the OS keychain")
-    llm_key.add_argument("--user", default="default")
-    llm_key.set_defaults(func=_set_llm_key)
+    fbench = sub.add_parser(
+        "friction-bench",
+        help="benchmark the vision-model action loop against a public reCAPTCHA demo page",
+    )
+    fbench.add_argument("--user", default="default")
+    fbench.add_argument(
+        "--headed", action="store_true",
+        help="show the browser window (debugging only - no human input is required)",
+    )
+    fbench.add_argument("--timeout-s", type=float, default=300.0)
+    fbench.set_defaults(func=_friction_bench)
+
+    fvkey = sub.add_parser(
+        "friction-set-vision-key", help="store the vision-model API key in the OS keychain"
+    )
+    fvkey.add_argument("--user", default="default")
+    fvkey.set_defaults(func=_friction_set_vision_key)
+
+    fimap = sub.add_parser(
+        "friction-set-imap-password", help="store an IMAP app password in the OS keychain"
+    )
+    fimap.add_argument("--user", default="default")
+    fimap.set_defaults(func=_friction_set_imap_password)
+
+    fotp = sub.add_parser(
+        "friction-otp", help="wait for a one-time code to arrive by email and print it"
+    )
+    fotp.add_argument("--user", default="default")
+    fotp.add_argument("--timeout-s", type=float, default=120.0)
+    fotp.set_defaults(func=_friction_otp)
 
     args = parser.parse_args(argv)
     _configure_logging(args.verbose)

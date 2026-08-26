@@ -11,10 +11,6 @@ dependencies = [
     "pydantic>=2.9",
     "httpx>=0.27",
     "pyyaml>=6.0",
-    # Round-trip YAML, used only when the chat assistant edits the config file.
-    # pyyaml's dumper rewrites from parsed data and drops every comment, and in
-    # this project the config comments are the documentation.
-    "ruamel.yaml>=0.18",
     "tzdata>=2024.1",
     "keyring>=25.0",
     "playwright>=1.45",
