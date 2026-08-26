@@ -39,6 +39,15 @@ class Notifier(ABC):
     async def claim_outcome(self, shift: Shift, result: ClaimResult, dry_run: bool) -> None:
         """Report the result of a claim attempt."""
 
+    async def system(self, text: str) -> None:
+        """The agent's own health, not a shift.
+
+        Concrete rather than abstract so existing notifiers keep working: the
+        default routes to `alert`, which is the right severity for "monitoring
+        has stopped". A transport can override to mark these differently.
+        """
+        await self.alert(text)
+
     async def digest(self, lines: list[str]) -> None:
         await self.info("\n".join(lines))
 

@@ -76,11 +76,11 @@ def _write_atomic(path: Path, content: str) -> None:
 
 
 def build_dashboard(
-    store: Store, config: UserConfig, outdir: str | Path, chat_url: str | None = None
+    store: Store, config: UserConfig, outdir: str | Path, *, chat_backed: bool = False
 ) -> Path:
     """Write index.html, shifts.ics and shifts.md. Returns the index path."""
     outdir = Path(outdir)
-    payload = build_payload(store, config)
+    payload = build_payload(store, config, chat_backed=chat_backed)
 
     calendar = build_calendar(payload["shifts"], name=f"Shift agent — {config.name}")
     markdown = build_markdown(payload["shifts"], timezone=payload["timezone"])
@@ -100,7 +100,7 @@ def build_dashboard(
 
 
 def try_build_dashboard(
-    store: Store, config: UserConfig, outdir: str | Path, chat_url: str | None = None
+    store: Store, config: UserConfig, outdir: str | Path, *, chat_backed: bool = False
 ) -> Path | None:
     """Build, swallowing any failure.
 
@@ -108,7 +108,7 @@ def try_build_dashboard(
     with it. The exception is logged rather than lost.
     """
     try:
-        return build_dashboard(store, config, outdir, chat_url)
+        return build_dashboard(store, config, outdir, chat_backed=chat_backed)
     except Exception:
         log.exception("dashboard build failed; polling continues")
         return None
