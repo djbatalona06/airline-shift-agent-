@@ -1,6 +1,6 @@
 # Shift Agent
 
-**Last updated:** 2026-08-19
+**Last updated:** 2026-08-26
 
 A plug-and-playable agent that picks up first-come, first-served shifts from
 your employer's portal.
@@ -98,6 +98,20 @@ python -m shift_agent.main demo
 ```
 
 Runs the whole pipeline on fabricated data — no config, credentials, or network.
+
+### Known issue, now fixed: the desktop app used to flash an unreadable error
+
+Earlier builds of `ShiftAgent.exe` shipped as a plain console program with no
+code path for being double-clicked — it printed a one-line usage error and
+exited in milliseconds, and Windows closes the console it spawned the instant
+the process ends. That is what made it unreadable: not a bug in what the
+error said, but that there was never enough time to read it. Double-clicking
+now opens the setup window described in [INSTALL.md](docs/INSTALL.md) instead,
+and any other startup failure writes a full log to
+`%LOCALAPPDATA%\shift-agent\logs\crash.log` and shows a short summary in a
+message box rather than a console that vanishes. See
+[INSTALL.md's Troubleshooting section](docs/INSTALL.md#troubleshooting) if
+you still hit an unexpected close.
 
 ---
 

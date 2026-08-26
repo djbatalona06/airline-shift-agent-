@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shift agent — setup</title>
+<style>
+/* Same design-token approach as dashboard/template.html, trimmed to the one
+   theme this one-time screen needs (a light/dark pair, no switcher) rather
+   than the dashboard's full four-theme system. */
+:root {
+  --sp-1: 0.25rem; --sp-2: 0.5rem;  --sp-3: 0.75rem; --sp-4: 1rem;
+  --sp-5: 1.5rem;  --sp-6: 2rem;    --sp-7: 3rem;
+  --fs-xs: 0.75rem; --fs-sm: 0.875rem; --fs-md: 1rem;
+  --fs-lg: 1.25rem; --fs-xl: 1.5rem;
+  --lh-tight: 1.25; --lh-body: 1.6;
+  --radius-sm: 6px; --radius-md: 10px; --radius-lg: 16px; --radius-pill: 999px;
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --dur: 160ms;
+
+  --bg: #f4f7fb;      --surface: #ffffff;   --surface-2: #eef3f9;
+  --ink: #0f2038;     --ink-2: #4a6076;     --ink-3: #7c8ea3;
+  --line: #dbe4ef;
+  --accent: #1d5fa8;  --accent-ink: #ffffff;
+  --bad:  #a32d2d;    --bad-bg:  #fbeaea;
+  --good: #0f6e56;    --good-bg: #e2f4ee;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d0f12;      --surface: #16191e;   --surface-2: #1f242b;
+    --ink: #e6e9ee;     --ink-2: #a3abb8;     --ink-3: #6f7987;
+    --line: #272d36;
+    --accent: #7f9fd8;  --accent-ink: #0d0f12;
+    --bad:  #dd8b8b;    --bad-bg:  #2f1a1a;
+    --good: #6fbfa0;    --good-bg: #142b24;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  font-family: var(--font-sans); font-size: var(--fs-md); line-height: var(--lh-body);
+  color: var(--ink); background: var(--bg); -webkit-font-smoothing: antialiased;
+}
+.shell { max-width: 560px; margin: 0 auto; padding: var(--sp-6) var(--sp-4) var(--sp-7); }
+
+h1, h2 { line-height: var(--lh-tight); margin: 0 0 var(--sp-2); font-weight: 600; }
+h1 { font-size: var(--fs-xl); }
+h2 { font-size: var(--fs-lg); }
+p  { margin: 0 0 var(--sp-4); color: var(--ink-2); }
+.subtitle { color: var(--ink-2); margin: 0 0 var(--sp-6); }
+
+.card {
+  background: var(--surface); border: var(--border-w, 1px) solid var(--line);
+  border-radius: var(--radius-lg); padding: var(--sp-5); margin-bottom: var(--sp-4);
+}
+
+.field { margin-bottom: var(--sp-4); }
+.field label { display: block; font-size: var(--fs-sm); font-weight: 600; margin-bottom: var(--sp-1); }
+.field .hint { font-size: var(--fs-xs); color: var(--ink-3); margin-top: var(--sp-1); }
+.field .error { font-size: var(--fs-xs); color: var(--bad); margin-top: var(--sp-1); display: none; }
+.field.has-error .error { display: block; }
+.field.has-error input, .field.has-error select { border-color: var(--bad); }
+
+.row { display: flex; gap: var(--sp-3); }
+.row > .field { flex: 1; }
+
+input[type="text"], input[type="number"], select {
+  width: 100%; font: inherit; color: var(--ink); background: var(--surface-2);
+  border: var(--border-w, 1px) solid var(--line); border-radius: var(--radius-sm);
+  padding: var(--sp-2) var(--sp-3);
+}
+input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.checkbox { display: flex; align-items: center; gap: var(--sp-2); }
+.checkbox label { font-weight: 600; font-size: var(--fs-sm); margin: 0; }
+
+.btn {
+  font: inherit; font-weight: 600; border-radius: var(--radius-sm); border: var(--border-w, 1px) solid var(--line);
+  padding: var(--sp-2) var(--sp-4); background: var(--surface-2); color: var(--ink); cursor: pointer;
+}
+.btn-primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.actions { display: flex; justify-content: flex-end; gap: var(--sp-3); margin-top: var(--sp-5); }
+
+.profile {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3);
+  padding: var(--sp-3); border: var(--border-w, 1px) solid var(--line); border-radius: var(--radius-md);
+  margin-bottom: var(--sp-2);
+}
+.profile .meta { font-size: var(--fs-sm); color: var(--ink-2); }
+.profile.broken .meta { color: var(--bad); }
+
+.banner {
+  border-radius: var(--radius-md); padding: var(--sp-3) var(--sp-4); margin-bottom: var(--sp-4);
+  font-size: var(--fs-sm); display: none;
+}
+.banner.bad { background: var(--bad-bg); color: var(--bad); display: block; }
+.banner.good { background: var(--good-bg); color: var(--good); display: block; }
+
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <h1>Shift agent</h1>
+  <p class="subtitle">Set up a profile, then the dashboard opens automatically.</p>
+
+  <div id="banner" class="banner" role="status"></div>
+
+  <section id="loading" class="card">
+    <p style="margin:0">Loading…</p>
+  </section>
+
+  <section id="picker" class="card" hidden>
+    <h2>Choose a profile</h2>
+    <div id="profile-list"></div>
+    <div class="actions">
+      <button type="button" class="btn btn-primary" id="new-profile">+ Create new profile</button>
+    </div>
+  </section>
+
+  <section id="form-section" class="card" hidden>
+    <h2 id="form-title">New profile</h2>
+
+    <div class="field" id="f-name">
+      <label for="name">Profile name</label>
+      <input type="text" id="name" placeholder="e.g. your first name">
+      <div class="error"></div>
+    </div>
+
+    <div class="row">
+      <div class="field" id="f-adapter">
+        <label for="adapter">Portal</label>
+        <select id="adapter">
+          <option value="mock">Try it with sample data (mock)</option>
+          <option value="flica">FLICA</option>
+        </select>
+        <div class="error"></div>
+      </div>
+      <div class="field" id="f-timezone">
+        <label for="timezone">Timezone</label>
+        <input type="text" id="timezone" placeholder="America/New_York">
+        <div class="hint">Pre-filled from your system clock — an IANA name like "America/New_York".</div>
+        <div class="error"></div>
+      </div>
+    </div>
+
+    <div class="field" id="f-home_base">
+      <label for="home_base">Home base (optional)</label>
+      <input type="text" id="home_base" placeholder="e.g. MCO">
+      <div class="hint">Only shifts based here will ever be pursued. Leave blank to disable.</div>
+      <div class="error"></div>
+    </div>
+
+    <div class="row">
+      <div class="field" id="f-grades_pursue">
+        <label for="grades_pursue">Grades to claim (optional)</label>
+        <input type="text" id="grades_pursue" placeholder="e.g. E, D, B">
+        <div class="error"></div>
+      </div>
+      <div class="field" id="f-grades_notify_only">
+        <label for="grades_notify_only">Grades to just alert on</label>
+        <input type="text" id="grades_notify_only" placeholder="e.g. A, C">
+        <div class="error"></div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="field" id="f-min_rest_hours">
+        <label for="min_rest_hours">Minimum rest (hours)</label>
+        <input type="number" id="min_rest_hours" value="10" min="0" max="48" step="0.5">
+        <div class="error"></div>
+      </div>
+      <div class="field" id="f-claim_mode">
+        <label for="claim_mode">Claim mode</label>
+        <select id="claim_mode">
+          <option value="notify_only">Notify only</option>
+          <option value="confirm" selected>Ask first (Confirm / Skip)</option>
+          <option value="auto">Auto-claim</option>
+        </select>
+        <div class="error"></div>
+      </div>
+    </div>
+
+    <div class="field checkbox">
+      <input type="checkbox" id="dry_run" checked>
+      <label for="dry_run">Dry run — evaluate and notify, but never claim anything yet</label>
+    </div>
+    <p class="hint" style="margin-top:calc(var(--sp-4) * -1)">Recommended for the first week, so you can compare its
+      choices against what you'd have picked.</p>
+
+    <div class="actions">
+      <button type="button" class="btn" id="back-to-picker" hidden>Back</button>
+      <button type="button" class="btn btn-primary" id="save">Save and open dashboard</button>
+    </div>
+  </section>
+
+  <section id="done" class="card" hidden>
+    <h2>You're set up</h2>
+    <p id="done-text"></p>
+    <p class="hint">You can close this window.</p>
+  </section>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  const $ = (id) => document.getElementById(id);
+  const banner = $("banner");
+
+  function showBanner(kind, text) {
+    banner.className = "banner " + kind;
+    banner.textContent = text;
+  }
+
+  function show(id) {
+    for (const s of ["loading", "picker", "form-section", "done"]) {
+      $(s).hidden = s !== id;
+    }
+  }
+
+  function clearFieldErrors() {
+    document.querySelectorAll(".field").forEach((f) => {
+      f.classList.remove("has-error");
+      const e = f.querySelector(".error");
+      if (e) e.textContent = "";
+    });
+  }
+
+  function applyFieldErrors(errors) {
+    clearFieldErrors();
+    let general = [];
+    for (const err of errors) {
+      const top = (err.field || "").split(".")[0];
+      const field = $("f-" + top);
+      if (field) {
+        field.classList.add("has-error");
+        field.querySelector(".error").textContent = err.message;
+      } else {
+        general.push(err.message);
+      }
+    }
+    if (general.length) showBanner("bad", general.join(" "));
+    else showBanner("bad", "Please fix the highlighted fields.");
+  }
+
+  async function api(path, body) {
+    const res = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    return res.json();
+  }
+
+  function prefillTimezone() {
+    try {
+      $("timezone").value = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+    } catch (e) {
+      /* leave blank; the user can type one */
+    }
+  }
+
+  function renderPicker(profiles) {
+    const list = $("profile-list");
+    list.innerHTML = "";
+    for (const p of profiles) {
+      const row = document.createElement("div");
+      row.className = "profile" + (p.error ? " broken" : "");
+      const info = document.createElement("div");
+      info.innerHTML = "<strong>" + p.name + "</strong><div class=\"meta\">" +
+        (p.error ? "Could not read this profile: " + p.error : (p.adapter + " · " + p.timezone)) +
+        "</div>";
+      row.appendChild(info);
+      if (!p.error) {
+        const btn = document.createElement("button");
+        btn.className = "btn btn-primary";
+        btn.textContent = "Open";
+        btn.onclick = async () => {
+          const result = await api("api/setup/choose", { profile_id: p.id });
+          if (result.ok) {
+            $("done-text").textContent = "Opening the dashboard for " + p.name + "…";
+            show("done");
+          } else {
+            showBanner("bad", result.error || "Could not open that profile.");
+          }
+        };
+        row.appendChild(btn);
+      }
+      list.appendChild(row);
+    }
+  }
+
+  async function loadPicker() {
+    const result = await fetch("api/setup/profiles").then((r) => r.json());
+    const profiles = (result && result.profiles) || [];
+    if (profiles.length) {
+      renderPicker(profiles);
+      $("back-to-picker").hidden = false;
+      show("picker");
+    } else {
+      prefillTimezone();
+      show("form-section");
+    }
+  }
+
+  $("new-profile").onclick = () => {
+    prefillTimezone();
+    show("form-section");
+  };
+  $("back-to-picker").onclick = () => show("picker");
+
+  $("save").onclick = async () => {
+    const payload = {
+      name: $("name").value,
+      adapter: $("adapter").value,
+      timezone: $("timezone").value,
+      home_base: $("home_base").value,
+      grades_pursue: $("grades_pursue").value,
+      grades_notify_only: $("grades_notify_only").value,
+      min_rest_hours: parseFloat($("min_rest_hours").value || "10"),
+      claim_mode: $("claim_mode").value,
+      dry_run: $("dry_run").checked,
+    };
+    $("save").disabled = true;
+    try {
+      const result = await api("api/setup/save", payload);
+      if (result.ok) {
+        clearFieldErrors();
+        showBanner("good", "Saved.");
+        $("done-text").textContent = "Profile \"" + payload.name + "\" saved. Opening the dashboard…";
+        show("done");
+      } else {
+        applyFieldErrors(result.errors || []);
+      }
+    } catch (e) {
+      showBanner("bad", "Could not reach the setup service. Close this window and try again.");
+    } finally {
+      $("save").disabled = false;
+    }
+  };
+
+  loadPicker();
+})();
+</script>
+</body>
+</html>
