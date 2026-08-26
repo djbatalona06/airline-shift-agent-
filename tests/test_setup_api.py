@@ -147,10 +147,16 @@ def served(tmp_path):
     server.stop()
 
 
-def post(url: str, payload: dict):
-    request = urllib.request.Request(
-        url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}
-    )
+def post(url: str, payload: dict, headers: dict | None = None):
+    """Sends what setup/index.html sends. A None value removes a header.
+
+    Mirrors test_chat_api.py's helper of the same name - the setup routes
+    are gated by the same _origin_ok() check the chat routes are.
+    """
+    sent = {"Content-Type": "application/json", "X-Shift-Agent": "1"}
+    sent.update(headers or {})
+    sent = {k: v for k, v in sent.items() if v is not None}
+    request = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=sent)
     return urllib.request.urlopen(request, timeout=10)
 
 
@@ -190,6 +196,25 @@ def test_choose_route(served):
 def test_setup_routes_are_absent_without_the_token(served):
     with pytest.raises(urllib.error.HTTPError) as exc:
         urllib.request.urlopen(f"http://127.0.0.1:{served.port}/api/setup/profiles", timeout=5)
+    assert exc.value.code == 404
+
+
+def test_save_route_without_the_custom_header_is_refused(served):
+    """Regression pin: do_POST dispatches across chat/setup routes, and it is
+    easy for a restructure to drop the shared _origin_ok() gate ahead of that
+    dispatch without any single route's own code changing at all."""
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        post(f"{served.url}api/setup/save", {"name": "Jane", "timezone": "UTC"},
+             headers={"X-Shift-Agent": None})
+    assert exc.value.code == 404
+    assert not paths.config_path("jane", create=False).is_file()
+
+
+def test_choose_route_without_the_custom_header_is_refused(served):
+    post(f"{served.url}api/setup/save", {"name": "Jane", "timezone": "UTC"})
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        post(f"{served.url}api/setup/choose", {"profile_id": "jane"},
+             headers={"X-Shift-Agent": None})
     assert exc.value.code == 404
 
 

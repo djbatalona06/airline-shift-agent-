@@ -149,6 +149,13 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         route = self._route()
+        # Same 404 as a wrong token or an unknown route, so a rejected write
+        # tells an attacker nothing about why. Checked once, ahead of the
+        # per-route dispatch below, since every write route - chat and the
+        # setup/save and setup/choose routes alike - needs it equally.
+        if not self._origin_ok():
+            self._deny()
+            return
         if route == CHAT_ROUTE and self._hub is not None:
             self._chat_post()
             return

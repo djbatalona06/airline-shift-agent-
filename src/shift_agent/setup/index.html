@@ -249,7 +249,10 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 1p
   async function api(path, body) {
     const res = await fetch(path, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      // X-Shift-Agent is what makes this a preflighted request. A page on
+      // another origin cannot set it, and the server refuses the write
+      // without it. See _origin_ok in dashboard/server.py.
+      headers: { "Content-Type": "application/json", "X-Shift-Agent": "1" },
       body: JSON.stringify(body || {}),
     });
     return res.json();
