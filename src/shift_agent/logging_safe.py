@@ -49,10 +49,18 @@ class SecretScrubbingFilter(logging.Filter):
         if isinstance(record.msg, str):
             record.msg = scrub(record.msg)
         if record.args:
+            # Only string args carry secret-shaped text worth scrubbing.
+            # Force-stringifying a non-string arg (an int passed for a %d, a
+            # float for %f, ...) would leave record.getMessage()'s own
+            # msg % args doing "%d" % "3", which raises TypeError - turning
+            # a routine log call into a logging error at exactly the moment
+            # (a failure being logged) when it matters most that it not.
             if isinstance(record.args, dict):
-                record.args = {k: scrub(v) for k, v in record.args.items()}
+                record.args = {
+                    k: scrub(v) if isinstance(v, str) else v for k, v in record.args.items()
+                }
             else:
-                record.args = tuple(scrub(a) for a in record.args)
+                record.args = tuple(scrub(a) if isinstance(a, str) else a for a in record.args)
         return True
 
 

@@ -3,6 +3,23 @@
 Run on Windows 11, Python 3.14.5, PyInstaller 6.22.0, pywebview 6.2.1,
 pythonnet 3.1.0. Verdict: **single portable `.exe` is viable.**
 
+> **2026-08-26 update:** the two gaps this spike flagged below — the real
+> build shipping without `--windowed`, and `pywebview` never being a declared
+> dependency — are now resolved. `build_release.ps1` uses `--windowed`;
+> `pywebview` is in `pyproject.toml`'s `dependencies`. This is what a
+> double-clicked `.exe` was doing instead: with no `--windowed` flag and no
+> code path for zero arguments, it printed an argparse usage error to a
+> console that Windows closed the instant the process exited — a "flash and
+> vanish" a user has no way to read. `src/shift_agent/setup/` is the first-run
+> window that flag's absence was quietly standing in for; `packaging/entry.py`
+> now also writes a crash log and shows a message box for anything that still
+> fails before a window exists. **Before shipping a release built with this
+> script, smoke-test the setup flow specifically**: run `ShiftAgent.exe` with
+> no profiles configured (a fresh `%LOCALAPPDATA%\shift-agent`) and confirm
+> the setup window opens, saves a profile, and hands off into its dashboard —
+> this exercises two sequential `webview.start()` calls in one process, which
+> this spike never tried.
+
 ## Results
 
 | Check | Result |

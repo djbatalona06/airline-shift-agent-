@@ -223,6 +223,60 @@ async def _run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _configured_profiles() -> list[str]:
+    """Profiles with an actual config, not just a directory.
+
+    paths.list_profiles() lists whatever subdirectories exist under
+    profiles/, which is not the same thing - a stray/partial directory (a
+    previous run interrupted mid-setup, say) must not be counted as a real
+    profile by _first_run below.
+    """
+    return [p for p in paths.list_profiles() if paths.config_path(p, create=False).is_file()]
+
+
+def _profile_dashboard_args(name: str) -> argparse.Namespace:
+    """A Namespace shaped like `dashboard --config ... --open`, for a known
+    profile - lets _first_run/_setup reuse _dashboard() unchanged.
+
+    `state` is set explicitly to this profile's own state.db. The top-level
+    `--state` option defaults to the legacy shared ~/.shift-agent/state.db
+    (DEFAULT_STATE below); leaving it unset here would silently open that
+    file instead of this profile's own poll history.
+    """
+    return argparse.Namespace(
+        config=paths.config_path(name, create=False),
+        out=None,
+        open=True,
+        state=paths.state_db(name),
+    )
+
+
+async def _setup(args: argparse.Namespace) -> int:
+    """Open the setup/picker window, then the dashboard for whatever profile
+    it resolved to. Also reachable directly as the `setup` subcommand, as a
+    deliberate escape hatch to add or reopen a profile later."""
+    from .setup import open_setup_window
+
+    chosen = open_setup_window()
+    if chosen:
+        return await _dashboard(_profile_dashboard_args(chosen))
+    return 0
+
+
+async def _first_run(args: argparse.Namespace) -> int:
+    """What running the exe with no subcommand does - the double-click case.
+
+    Exactly one configured profile: skip straight to its dashboard, so a
+    returning user's double-click just works. Zero or more than one: open the
+    setup/picker window, which handles both "create the first one" and
+    "choose among several" - see setup/index.html.
+    """
+    profiles = _configured_profiles()
+    if len(profiles) == 1:
+        return await _dashboard(_profile_dashboard_args(profiles[0]))
+    return await _setup(args)
+
+
 async def _dashboard(args: argparse.Namespace) -> int:
     from .dashboard import build_dashboard
 
@@ -444,7 +498,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="shift-agent")
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument("--state", type=Path, default=DEFAULT_STATE, help="SQLite state file")
-    sub = parser.add_subparsers(dest="command", required=True)
+    # Not required: running the exe with no subcommand at all is the ordinary
+    # double-click case, handled by _first_run below rather than by argparse
+    # rejecting it outright. See setup/ for what that opens.
+    sub = parser.add_subparsers(dest="command", required=False)
 
     run = sub.add_parser("run", help="poll a configured portal")
     run.add_argument("--config", type=Path, required=True)
@@ -458,6 +515,11 @@ def main(argv: list[str] | None = None) -> int:
 
     demo = sub.add_parser("demo", help="run the pipeline on fabricated data")
     demo.set_defaults(func=_demo)
+
+    setup_cmd = sub.add_parser(
+        "setup", help="open the profile setup/picker window (also opens with no subcommand)"
+    )
+    setup_cmd.set_defaults(func=_setup)
 
     dash = sub.add_parser("dashboard", help="build the dashboard for a profile")
     dash.add_argument("--config", type=Path, required=True)
@@ -526,6 +588,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
+    if args.command is None:
+        return asyncio.run(_first_run(args))
     return asyncio.run(args.func(args))
 
 

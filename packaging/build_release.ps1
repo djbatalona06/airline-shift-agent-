@@ -21,7 +21,12 @@ if ($LASTEXITCODE -ne 0) { throw "Tests failed - not building a release." }
 
 Write-Host "==> Building executable" -ForegroundColor Cyan
 $template = Join-Path $root "src\shift_agent\dashboard\template.html"
-& $py -m PyInstaller --onefile --name ShiftAgent `
+$setupTemplate = Join-Path $root "src\shift_agent\setup\index.html"
+# --windowed: the app now has a real first-run setup window (see
+# src/shift_agent/setup/) and a message-box crash path (packaging/entry.py)
+# to replace it, so a working build never needs a console. See
+# packaging/README.md for why the earlier build skipped this flag.
+& $py -m PyInstaller --onefile --windowed --name ShiftAgent `
     --distpath $dist `
     --workpath (Join-Path $root "packaging\build") `
     --specpath (Join-Path $root "packaging") `
@@ -29,6 +34,7 @@ $template = Join-Path $root "src\shift_agent\dashboard\template.html"
     --hidden-import keyring.backends.Windows `
     --hidden-import clr_loader `
     --add-data "$template;shift_agent/dashboard" `
+    --add-data "$setupTemplate;shift_agent/setup" `
     --noconfirm (Join-Path $root "packaging\entry.py")
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed." }
 

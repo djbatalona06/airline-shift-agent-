@@ -275,6 +275,25 @@ Once linked: `/status`, `/pause`, `/resume`, `/schedule`.
 
 ## Troubleshooting
 
+**Double-clicking `ShiftAgent.exe` used to flash a console and close before I
+could read it.** Fixed. Earlier builds shipped as a plain console program
+with no code path for being double-clicked with no arguments, so it printed a
+one-line usage error and exited in milliseconds — Windows closes the console
+it spawned the instant the process ends, which is what made it unreadable.
+Current builds are windowed (no console at all) and open the setup window
+described above on first run. If you still hit an unexpected close on a
+current build, something else failed before any window could open — check
+`%LOCALAPPDATA%\shift-agent\logs\crash.log` for the full detail; a short
+summary of the same error also shows in a message box before the app exits.
+
+**I ran `ShiftAgent.exe` with command-line arguments from an already-open
+terminal (`ShiftAgent.exe run --once`, `ShiftAgent.exe set-token`, …) and got
+no output.** The release build is windowed, which detaches it from the
+console it was launched from — expected for the no-argument desktop flow, but
+it means the packaged exe currently has no way to print to a terminal you
+already have open. Use the [Localhost](#localhost) install instead for any
+CLI subcommand; `set-token`/`link` are already only documented that way, above.
+
 **`ModuleNotFoundError: No module named 'shift_agent'`** — the package isn't
 installed in the interpreter you're using. Run `pip install -e .` inside the
 virtual environment, and call `.venv\Scripts\python.exe` rather than a bare

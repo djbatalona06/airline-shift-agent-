@@ -38,6 +38,9 @@ CONTENT_TYPES = {
 }
 
 CHAT_ROUTE = "api/chat"
+SETUP_PROFILES_ROUTE = "api/setup/profiles"
+SETUP_SAVE_ROUTE = "api/setup/save"
+SETUP_CHOOSE_ROUTE = "api/setup/choose"
 MAX_BODY_BYTES = 16 * 1024
 
 # The page is a single self-contained file with inline CSS and JS and no remote
@@ -59,13 +62,18 @@ CSP = (
 class _Handler(BaseHTTPRequestHandler):
     server_version = "shift-agent"
 
-    def __init__(self, *args, directory: Path, token: str, hub=None, loop=None, **kwargs) -> None:
+    def __init__(
+        self, *args, directory: Path, token: str, hub=None, loop=None, setup_api=None, **kwargs
+    ) -> None:
         self._directory = directory
         self._token = token
         # Both None unless the agent is running with the chat surface enabled;
         # the API routes then 404 exactly like any other unknown path.
         self._hub = hub
         self._loop = loop
+        # None unless this server is showing the first-run setup/picker window;
+        # the setup routes then 404 exactly like any other unknown path.
+        self._setup_api = setup_api
         super().__init__(*args, **kwargs)
 
     def log_message(self, fmt: str, *args) -> None:
@@ -91,6 +99,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._chat_history()
             return
 
+        if name == SETUP_PROFILES_ROUTE and self._setup_api is not None:
+            self._setup_profiles()
+            return
+
         target = (self._directory / (name or "index.html")).resolve()
         try:
             target.relative_to(self._directory.resolve())
@@ -109,31 +121,59 @@ class _Handler(BaseHTTPRequestHandler):
         )
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-        if self._route() != CHAT_ROUTE:
-            self._deny()
+        route = self._route()
+        if route == CHAT_ROUTE and self._hub is not None:
+            self._chat_post()
             return
-        if self._hub is None:
-            self._deny()
+        if route == SETUP_SAVE_ROUTE and self._setup_api is not None:
+            self._setup_save()
             return
+        if route == SETUP_CHOOSE_ROUTE and self._setup_api is not None:
+            self._setup_choose()
+            return
+        self._deny()
 
+    def _read_json_body(self) -> dict | None:
+        """Parse a size-capped JSON object body, or None if it's not usable."""
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
-            self._deny()
-            return
+            return None
         if length <= 0 or length > MAX_BODY_BYTES:
-            self._deny()
-            return
-
+            return None
         try:
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
-            text = str(payload["text"])
-        except (ValueError, KeyError, TypeError, UnicodeDecodeError):
+        except (ValueError, UnicodeDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _chat_post(self) -> None:
+        payload = self._read_json_body()
+        if payload is None:
             self._deny()
             return
-
+        try:
+            text = str(payload["text"])
+        except (KeyError, TypeError):
+            self._deny()
+            return
         reply = self._call_hub(self._hub.post(text, source="dashboard"))
         self._json({"reply": reply})
+
+    def _setup_profiles(self) -> None:
+        self._json({"profiles": self._setup_api.list_profiles()})
+
+    def _setup_save(self) -> None:
+        payload = self._read_json_body()
+        if payload is None:
+            self._deny()
+            return
+        self._json(self._setup_api.save_profile(payload))
+
+    def _setup_choose(self) -> None:
+        payload = self._read_json_body() or {}
+        profile_id = str(payload.get("profile_id", ""))
+        self._json(self._setup_api.choose(profile_id))
 
     def _chat_history(self) -> None:
         if self._hub is None:
@@ -183,12 +223,19 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 class DashboardServer:
-    def __init__(self, directory: str | Path, port: int = 0, hub=None, loop=None) -> None:
+    def __init__(
+        self, directory: str | Path, port: int = 0, hub=None, loop=None, setup_api=None
+    ) -> None:
         self.directory = Path(directory)
         self.token = secrets.token_urlsafe(16)
         self.hub = hub
         handler = partial(
-            _Handler, directory=self.directory, token=self.token, hub=hub, loop=loop
+            _Handler,
+            directory=self.directory,
+            token=self.token,
+            hub=hub,
+            loop=loop,
+            setup_api=setup_api,
         )
         # 127.0.0.1, never 0.0.0.0 - see module docstring.
         self._server = ThreadingHTTPServer(("127.0.0.1", port), handler)
