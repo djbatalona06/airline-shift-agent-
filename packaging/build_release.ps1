@@ -74,6 +74,16 @@ $zip = Join-Path $root "packaging\release\ShiftAgent-windows.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -Path $stage -DestinationPath $zip
 
+# Verify the zip that will actually be uploaded, not just the staging folder
+# it was built from - this is the check that would have caught the v1.0.1
+# release asset shipping without browsers/ (it was zipped from the wrong
+# folder, bypassing every guard above).
+Write-Host "==> Verifying zip contents" -ForegroundColor Cyan
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$entries = [System.IO.Compression.ZipFile]::OpenRead($zip).Entries.FullName
+if (-not ($entries -match "ShiftAgent\.exe$")) { throw "Zip is missing ShiftAgent.exe." }
+if (-not ($entries -match "browsers/chromium[^/]*/.+")) { throw "Zip is missing the browsers/chromium payload." }
+
 $mb = [math]::Round((Get-Item $zip).Length / 1MB, 1)
 Write-Host "==> Done: $zip ($mb MB)" -ForegroundColor Green
 Write-Host "    Upload as a GitHub Release asset - do not commit it."

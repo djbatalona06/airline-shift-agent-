@@ -1,6 +1,6 @@
 # Shift Agent
 
-**Last updated:** 2026-08-26
+**Last updated:** 2026-09-08
 
 A plug-and-playable agent that picks up first-come, first-served shifts from
 your employer's portal.
@@ -98,6 +98,19 @@ python -m shift_agent.main demo
 ```
 
 Runs the whole pipeline on fabricated data — no config, credentials, or network.
+
+### Known issue, now fixed: the v1.0.1 download was missing its browser
+
+The `ShiftAgent-windows.zip` published on 2026-08-12 had `ShiftAgent.exe` but
+no `browsers/` folder beside it, so every run failed with Playwright's
+generic "run `playwright install chromium`" message — advice that makes no
+sense to someone who only has an `.exe`, no Python. The build script always
+staged Chromium correctly; the zip that got uploaded that day didn't come
+from it. The script now verifies its own output before finishing, and
+`ShiftAgent.exe` now detects a missing `browsers/` folder itself and prints
+"re-extract the whole zip" instead of Playwright's message. See
+[docs/DEPLOY.md](docs/DEPLOY.md) for how releases get built and verified now.
+If you downloaded before this fix, re-download the latest release.
 
 ### Known issue, now fixed: the desktop app used to flash an unreadable error
 

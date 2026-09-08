@@ -1,0 +1,46 @@
+name: release
+
+# Builds ShiftAgent-windows.zip the same way a human would (packaging/build_release.ps1)
+# and attaches it to an existing GitHub Release. Manual only - cutting a release
+# is a deliberate act, not something a push should trigger.
+#
+# This exists because the only release published so far was hand-zipped from
+# the wrong folder (packaging/dist/, which has no browsers/) instead of the
+# staged one build_release.ps1 produces - see DEPLOY.md. Building here, on a
+# clean windows-latest runner, from whatever the script actually does today,
+# is what keeps that from happening again.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach ShiftAgent-windows.zip to"
+        required: true
+        default: "release"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-upload:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m venv .venv
+          .venv\Scripts\python.exe -m pip install --upgrade pip
+          .venv\Scripts\python.exe -m pip install -e ".[dev,packaging]"
+          .venv\Scripts\python.exe -m playwright install chromium
+
+      - name: Build (runs tests, then packages ShiftAgent-windows.zip)
+        run: pwsh -File packaging/build_release.ps1
+
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.tag }}" packaging/release/ShiftAgent-windows.zip --clobber
