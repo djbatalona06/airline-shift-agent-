@@ -302,6 +302,14 @@ virtual environment, and call `.venv\Scripts\python.exe` rather than a bare
 **`playwright._impl._errors.Error: Executable doesn't exist`** — run
 `python -m playwright install chromium`.
 
+**"The browser files are missing"** (desktop app) — the `browsers` folder
+that ships beside `ShiftAgent.exe` isn't there, usually because only the
+`.exe` was moved out of its zip on its own, or (if you downloaded before
+2026-09-08) you have the one broken release build that shipped without it —
+see [docs/DEPLOY.md](DEPLOY.md). Either way: re-download the
+[latest release](https://github.com/djbatalona06/airline-shift-agent-/releases/latest)
+and keep the whole extracted folder together.
+
 **Windows: `Could not install packages due to an OSError ... No such file or
 directory`** with a very long path in the message. Windows caps paths at 260
 characters by default and some of Playwright's internal files are deeply nested.

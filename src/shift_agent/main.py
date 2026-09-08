@@ -50,10 +50,19 @@ def _configure_browsers() -> None:
 
 
 def browsers_available() -> bool:
-    path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
-    if path:
-        return any(Path(path).glob("chromium*"))
-    return True   # source installs resolve through Playwright's own default
+    """Whether Playwright can actually find Chromium.
+
+    A frozen build only ever looks beside the exe (see _configure_browsers
+    above) - checking the env var it *might* have set is a fail-open proxy:
+    when the browsers/ folder is missing, that var is never set, so this used
+    to return True ("available") for the exact case it needs to catch. Ask
+    the frozen build directly instead. Source installs have no such sibling
+    folder and resolve through Playwright's own default cache.
+    """
+    if getattr(sys, "frozen", False):
+        beside = Path(sys.executable).parent / "browsers"
+        return beside.is_dir() and any(beside.glob("chromium*"))
+    return True
 
 
 def _configure_logging(verbose: bool) -> None:

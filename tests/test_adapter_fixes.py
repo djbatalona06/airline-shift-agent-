@@ -33,7 +33,12 @@ def make_config(**over) -> UserConfig:
         "portal": {"adapter": "mock"},
         "availability": {
             "timezone": "UTC",
-            "slots": [{"day": d, "start": "00:00", "end": "23:59"} for d in ALL_DAYS],
+            # 00:00 -> 00:00 crosses midnight (see Slot.crosses_midnight), so
+            # each day covers a full 24h and consecutive days merge into
+            # continuous availability. "23:59" leaves a one-minute hole at
+            # midnight that made these tests time-of-day dependent - see the
+            # same fix already applied in tests/test_poller.py.
+            "slots": [{"day": d, "start": "00:00", "end": "00:00"} for d in ALL_DAYS],
         },
         "rules": {"min_rest_hours": 0},
         "claim_mode": "auto",
